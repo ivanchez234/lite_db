@@ -20,5 +20,5 @@ private:
 public:
     TcpServer(int port, Database* db);
     void start();
-    void handleClient(int client_socket);
+    void handleClient(SOCKET client_socket);
 };

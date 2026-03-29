@@ -38,31 +38,42 @@ void TcpServer::start() {
     }
 }
 
-void TcpServer::handleClient(int client_socket) {
-    char buffer[1024];
-
+void TcpServer::handleClient(SOCKET clientSocket) {
+    char buffer[4096];
+    
     while (true) {
-#ifdef _WIN32
-        int bytes = recv(client_socket, buffer, sizeof(buffer), 0);
-#else
-        int bytes = read(client_socket, buffer, sizeof(buffer));
-#endif
+        // Читаем данные из сокета
+        int bytesRead = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
+        if (bytesRead <= 0) break;
 
-        if (bytes <= 0) break;
+        buffer[bytesRead] = '\0'; // Гарантируем конец строки
+        std::string fullData(buffer);
+        std::stringstream ss(fullData);
+        std::string singleCommand;
 
-        std::string request(buffer, bytes);
-        std::string response = database->execute(request);
+        // Разделяем входную строку по символу ';'
+        while (std::getline(ss, singleCommand, ';')) {
+            
+            // 1. Убираем мусор (пробелы, табы, переносы) по краям команды
+            size_t first = singleCommand.find_first_not_of(" \n\r\t");
+            if (first == std::string::npos) continue; // Строка пустая или из одних пробелов
+            size_t last = singleCommand.find_last_not_of(" \n\r\t");
+            singleCommand = singleCommand.substr(first, (last - first + 1));
 
-#ifdef _WIN32
-        send(client_socket, response.c_str(), response.size(), 0);
-#else
-        write(client_socket, response.c_str(), response.size());
-#endif
+            if (singleCommand.empty()) continue;
+
+            // 2. Выполняем команду (используй то имя переменной, которое у тебя в классе)
+            std::string result = database->execute(singleCommand);
+            
+            // 3. Отправляем ответ клиенту
+            send(clientSocket, result.c_str(), (int)result.size(), 0);
+        }
     }
 
+    // Закрываем сокет
 #ifdef _WIN32
-    closesocket(client_socket);
+    closesocket(clientSocket);
 #else
-    close(client_socket);
+    close(clientSocket);
 #endif
 }
