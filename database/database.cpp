@@ -60,6 +60,25 @@ std::string Database::execute(const std::string& query) {
         return "OK";
     }
 
+    // --- UPDATE (Только для существующих) ---
+    else if (command == "UPDATE") {
+        int key;
+        if (!(ss >> key)) return "ERR_INVALID_KEY";
+        
+        // Проверка: если ключа нет, обновлять нечего
+        if (!storage.exists(key)) return "ERR_KEY_NOT_FOUND";
+
+        std::string value;
+        std::getline(ss >> std::ws, value);
+        if (!value.empty() && value.back() == ';') value.pop_back();
+        
+        if (trim(value).front() != '{') return "ERR_INVALID_JSON";
+
+        // В Storage метод insert просто перезапишет смещение в хеш-карте
+        storage.insert(key, value); 
+        return "OK";
+    }
+    
     // --- ЛОГИКА SELECT ---
     else if (command == "SELECT") {
         int key;

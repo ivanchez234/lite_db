@@ -2,23 +2,28 @@
 #include <string>
 #include <unordered_map>
 #include <mutex>
-#include <vector>
 #include <filesystem>
 
 namespace fs = std::filesystem;
+
+// Структура для хранения точного адреса данных
+struct FileLocation {
+    std::string filename;
+    std::streampos offset; // Смещение в байтах от начала файла
+};
 
 class Storage {
 private:
     std::string base_name = "seg_";
     int current_seg_id = 0;
-    size_t MAX_SEG_SIZE = 5120; // 5 KB
+    const size_t MAX_SEG_SIZE = 5120; // Твои 5 КБ
 
-    // Индекс: ID -> Имя файла
-    std::unordered_map<int, std::string> index;
+    // Теперь индекс хранит и файл, и позицию в нем
+    std::unordered_map<int, FileLocation> index;
     std::mutex mtx;
 
     std::string get_seg_name(int id) { return base_name + std::to_string(id) + ".db"; }
-    void load_index(); // Просканировать все файлы и заполнить индекс
+    void load_index(); 
     size_t get_file_size(const std::string& filename);
 
 public:
