@@ -1,6 +1,8 @@
 #include "tcp_server.h"
 #include <iostream>
 #include <thread>
+#include <sstream> // Исправляет "incomplete type std::stringstream"
+#include <string>  // Исправляет "no instance of std::getline"
 
 #ifdef _WIN32
     #pragma comment(lib, "ws2_32.lib")
