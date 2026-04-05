@@ -59,14 +59,32 @@ std::string Database::execute(const std::string& query) {
         return "ERR_TABLE_NOT_FOUND";
     }
 
-    // 3. SELECT
+        // В файле database.cpp внутри метода execute
     if (cmd == "SELECT") {
-        int id;
-        if (!(ss >> id)) return "ERR_INVALID_ID";
-        std::string key;
-        ss >> key;
-        return storage.select(table_name, id, trim_cmd(key));
-    } 
+        std::string arg;
+        if (!(ss >> arg)) return "ERR_MISSING_ARGUMENTS";
+        
+        // Приводим к верхнему регистру для сравнения с "ALL"
+        std::string upper_arg = arg;
+        std::transform(upper_arg.begin(), upper_arg.end(), upper_arg.begin(), ::toupper);
+
+        // Вариант 1: Выборка всех данных
+        if (upper_arg == "ALL" || upper_arg == "*") {
+            return storage.select_all(table_name);
+        }
+
+        // Вариант 2: Выборка по конкретному ID
+        try {
+            int id = std::stoi(arg); // Пробуем конвертировать строку в число
+            std::string key;
+            if (ss >> key) {
+                key = trim_cmd(key);
+            }
+            return storage.select(table_name, id, key);
+        } catch (...) {
+            return "ERR_INVALID_ID_OR_COMMAND (Expected INT or ALL)";
+        }
+    }
 
     // 4. INSERT / UPDATE
     if (cmd == "INSERT" || cmd == "UPDATE") {

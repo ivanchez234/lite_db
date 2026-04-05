@@ -259,12 +259,41 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
         std::string res(r.data_size, ' ');
         in.read(&res[0], r.data_size);
         return res;
-}
+        }
     }
     return "ERR_KEY_NOT_FOUND";
 }
 
+std::string Storage::select_all(const std::string& table_name) {
+    Table* t = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(tables_mtx);
+        if (!tables.count(table_name)) return "ERR_TABLE_NOT_FOUND";
+        t = tables[table_name];
+    }
 
+    // ВАЖНО: Мы НЕ блокируем t->mtx здесь, 
+    // потому что метод select() ниже сделает это сам для каждой записи.
+    
+    if (t->index.empty()) return "[]";
+
+    std::string result = "[\n";
+    bool first = true;
+
+    // Делаем копию индекса или просто проходим по нему, 
+    // так как чтение структуры индекса обычно безопасно.
+    for (auto const& [id, loc] : t->index) {
+        if (!first) result += ",\n";
+        
+        // select сам заблокирует мьютекс, прочитает данные и разблокирует.
+        std::string record = select(table_name, id, ""); 
+        result += "  { \"id\": " + std::to_string(id) + ", \"data\": " + record + " }";
+        first = false;
+    }
+
+    result += "\n]";
+    return result;
+}
 void Storage::load_table_index(Table* t) {
     int sid = 0;
     while (fs::exists(t->path + "seg_" + std::to_string(sid) + ".db")) {

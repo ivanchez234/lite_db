@@ -72,6 +72,7 @@ public:
     bool set_schema(const std::string& table_name, const std::vector<Column>& columns);
     void insert(const std::string& table_name, int id, const std::string& json_str);
     std::string select(const std::string& table_name, int id, const std::string& target_key = "");
+    std::string select_all(const std::string& table_name);
     void remove(const std::string& table_name, int id);
     bool exists(const std::string& table_name, int id);
 };
