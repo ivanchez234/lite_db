@@ -3,24 +3,45 @@
 #include <map>
 #include <sstream>
 #include <algorithm>
-#include <filesystem>
 
-namespace fs = std::filesystem;
+// Конструктор: инициализирует корневую папку и загружает существующие таблицы
+Storage::Storage() {
+    if (!fs::exists(root_path)) {
+        fs::create_directory(root_path);
+    }
+    
+    // Сканируем директорию data/ на наличие подпапок (таблиц)
+    for (const auto& entry : fs::directory_iterator(root_path)) {
+        if (entry.is_directory()) {
+            std::string t_name = entry.path().filename().string();
+            // Загружаем таблицу. Если она уже на диске, create_table её подцепит
+            create_table(t_name); 
+        }
+    }
+}
 
-Storage::Storage() { load_index(); }
+// Деструктор: чистим динамическую память
+Storage::~Storage() {
+    std::lock_guard<std::mutex> lock(tables_mtx);
+    for (auto& [name, table] : tables) {
+        delete table;
+    }
+}
 
+// Хеширование ключей (DJB2)
 uint32_t Storage::hash_string(const std::string& s) {
     uint32_t hash = 5381;
     for (char c : s) hash = ((hash << 5) + hash) + c;
     return hash;
 }
 
-// Простой парсер: {"a":1} -> map["a"]="1"
-std::map<std::string, std::string> parse_json_manual(std::string s) {
+// Ручной парсер JSON (строка -> map)
+std::map<std::string, std::string> Storage::parse_json_manual(std::string s) {
     std::map<std::string, std::string> res;
     s.erase(std::remove(s.begin(), s.end(), '{'), s.end());
     s.erase(std::remove(s.begin(), s.end(), '}'), s.end());
     s.erase(std::remove(s.begin(), s.end(), '\"'), s.end());
+    
     std::stringstream ss(s);
     std::string item;
     while (std::getline(ss, item, ',')) {
@@ -28,6 +49,7 @@ std::map<std::string, std::string> parse_json_manual(std::string s) {
         if (colon != std::string::npos) {
             std::string k = item.substr(0, colon);
             std::string v = item.substr(colon + 1);
+            // Убираем лишние пробелы (trim)
             k.erase(0, k.find_first_not_of(" ")); k.erase(k.find_last_not_of(" ") + 1);
             v.erase(0, v.find_first_not_of(" ")); v.erase(v.find_last_not_of(" ") + 1);
             res[k] = v;
@@ -36,9 +58,10 @@ std::map<std::string, std::string> parse_json_manual(std::string s) {
     return res;
 }
 
+// Упаковка данных в бинарный формат
 std::vector<char> Storage::pack_json(const std::string& json_str) {
     auto data = parse_json_manual(json_str);
-    data["__full__"] = json_str; // Скрытый ключ для SELECT без параметров
+    data["__full__"] = json_str; 
 
     BinaryHeader head;
     head.keys_count = (uint32_t)data.size();
@@ -66,21 +89,45 @@ std::vector<char> Storage::pack_json(const std::string& json_str) {
     return buf;
 }
 
-void Storage::insert(int id, const std::string& json_str) {
-    std::lock_guard<std::mutex> lock(mtx);
+// Создание новой таблицы (или регистрация существующей)
+bool Storage::create_table(const std::string& name) {
+    std::lock_guard<std::mutex> lock(tables_mtx);
+    if (tables.count(name)) return false;
+
+    std::string t_path = root_path + name + "/";
+    if (!fs::exists(t_path)) {
+        fs::create_directories(t_path);
+    }
+
+    Table* t = new Table();
+    t->name = name;
+    t->path = t_path;
+    load_table_index(t); // Загружаем индекс именно этой таблицы
+    
+    tables[name] = t;
+    return true;
+}
+
+// Вставка данных
+void Storage::insert(const std::string& table_name, int id, const std::string& json_str) {
+    Table* t = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(tables_mtx);
+        if (!tables.count(table_name)) return;
+        t = tables[table_name];
+    }
+
+    // Блокируем только конкретную таблицу
+    std::lock_guard<std::mutex> t_lock(t->mtx);
     
     std::vector<char> bin = pack_json(json_str);
-    std::string fname = base_name + std::to_string(current_seg_id) + ".db";
+    std::string fname = t->path + "seg_" + std::to_string(t->current_seg_id) + ".db";
 
-    // Открываем БЕЗ ios::app, используем ios::ate (at the end), чтобы курсор сразу был в конце
     std::ofstream out(fname, std::ios::binary | std::ios::in | std::ios::out | std::ios::ate);
-    
     if (!out.is_open()) {
-        // Если файла нет, создаем новый
         out.open(fname, std::ios::binary | std::ios::out);
     }
 
-    // Принудительно прыгаем в самый конец, чтобы получить актуальную позицию
     out.seekp(0, std::ios::end);
     std::streampos pos = out.tellp(); 
 
@@ -88,23 +135,29 @@ void Storage::insert(int id, const std::string& json_str) {
     out.write((char*)&id, sizeof(int));
     out.write((char*)&len, sizeof(uint32_t));
     out.write(bin.data(), bin.size());
-    out.flush(); // Сбрасываем буфер, чтобы данные точно были на диске
+    out.flush(); 
 
-    // ОБНОВЛЯЕМ индекс. Если ID 10 уже был, старое значение затрется новым адресом.
-    index[id] = { fname, pos };
+    t->index[id] = { fname, pos };
 
-    // Проверка на размер сегмента
     if (pos > (std::streamoff)MAX_SEG_SIZE) {
-        current_seg_id++;
+        t->current_seg_id++;
     }
 }
 
-std::string Storage::select(int id, const std::string& target_key) {
+// Поиск данных
+std::string Storage::select(const std::string& table_name, int id, const std::string& target_key) {
+    Table* t = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(tables_mtx);
+        if (!tables.count(table_name)) return "ERR_TABLE_NOT_FOUND";
+        t = tables[table_name];
+    }
+
     FileLocation loc;
     {
-        std::lock_guard<std::mutex> lock(mtx);
-        if (index.find(id) == index.end()) return "ERR_NOT_FOUND";
-        loc = index[id];
+        std::lock_guard<std::mutex> t_lock(t->mtx);
+        if (t->index.find(id) == t->index.end()) return "ERR_NOT_FOUND";
+        loc = t->index[id];
     }
 
     std::ifstream in(loc.filename, std::ios::binary);
@@ -136,31 +189,36 @@ std::string Storage::select(int id, const std::string& target_key) {
     return "ERR_KEY_NOT_FOUND";
 }
 
-bool Storage::exists(int id) {
-    std::lock_guard<std::mutex> lock(mtx);
-    return index.find(id) != index.end();
-}
-
-void Storage::remove(int id) {
-    std::lock_guard<std::mutex> lock(mtx);
-    index.erase(id);
-}
-
-void Storage::load_index() {
-    std::lock_guard<std::mutex> lock(mtx);
+// Загрузка индекса для конкретной таблицы
+void Storage::load_table_index(Table* t) {
     int sid = 0;
-    while (fs::exists(base_name + std::to_string(sid) + ".db")) {
-        std::string fn = base_name + std::to_string(sid) + ".db";
+    while (fs::exists(t->path + "seg_" + std::to_string(sid) + ".db")) {
+        std::string fn = t->path + "seg_" + std::to_string(sid) + ".db";
         std::ifstream in(fn, std::ios::binary);
         while (in.peek() != EOF) {
             std::streampos p = in.tellg();
             int id; uint32_t len;
             if (!in.read((char*)&id, sizeof(int))) break;
             if (!in.read((char*)&len, sizeof(uint32_t))) break;
-            index[id] = { fn, p };
+            t->index[id] = { fn, p };
             in.seekg(len, std::ios::cur);
         }
         sid++;
     }
-    current_seg_id = std::max(0, sid - 1);
+    t->current_seg_id = std::max(0, sid - 1);
+}
+
+bool Storage::exists(const std::string& table_name, int id) {
+    std::lock_guard<std::mutex> lock(tables_mtx);
+    if (!tables.count(table_name)) return false;
+    auto& idx = tables[table_name]->index;
+    return idx.find(id) != idx.end();
+}
+
+void Storage::remove(const std::string& table_name, int id) {
+    std::lock_guard<std::mutex> lock(tables_mtx);
+    if (tables.count(table_name)) {
+        std::lock_guard<std::mutex> t_lock(tables[table_name]->mtx);
+        tables[table_name]->index.erase(id);
+    }
 }

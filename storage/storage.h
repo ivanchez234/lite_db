@@ -1,21 +1,25 @@
 #pragma once
 #include <string>
 #include <unordered_map>
+#include <map>
 #include <vector>
 #include <mutex>
 #include <fstream>
+#include <filesystem>
 
-#pragma pack(push, 1) // Отключаем лишние отступы в структурах
+namespace fs = std::filesystem;
+
+#pragma pack(push, 1)
 struct BinaryHeader {
-    uint32_t magic = 0x4A423031; // "JB01"
-    uint32_t total_size;        
-    uint32_t keys_count;        
+    uint32_t magic = 0x4A423031;
+    uint32_t total_size;         
+    uint32_t keys_count;         
 };
 
 struct KeyRecord {
-    uint32_t key_hash;          
-    uint32_t data_offset;       
-    uint32_t data_size;         
+    uint32_t key_hash;           
+    uint32_t data_offset;        
+    uint32_t data_size;          
 };
 #pragma pack(pop)
 
@@ -24,22 +28,35 @@ struct FileLocation {
     std::streampos offset;
 };
 
+// Сущность отдельной таблицы
+struct Table {
+    std::string name;
+    std::string path;
+    int current_seg_id = 0;
+    std::unordered_map<int, FileLocation> index;
+    std::mutex mtx; // Мьютекс на уровне таблицы
+};
+
 class Storage {
 private:
-    std::string base_name = "seg_";
-    int current_seg_id = 0;
-    const size_t MAX_SEG_SIZE = 1024 * 1024; // 1 MB сегмент
-    std::unordered_map<int, FileLocation> index;
-    std::mutex mtx;
+    std::string root_path = "data/";
+    const size_t MAX_SEG_SIZE = 1024 * 1024;
+    std::unordered_map<std::string, Table*> tables; 
+    std::mutex tables_mtx; // Мьютекс для защиты списка таблиц
+
+    std::map<std::string, std::string> parse_json_manual(std::string s);
 
     uint32_t hash_string(const std::string& s);
     std::vector<char> pack_json(const std::string& json_str);
-    void load_index();
+    void load_table_index(Table* table);
 
 public:
     Storage();
-    void insert(int id, const std::string& json_str);
-    std::string select(int id, const std::string& target_key = "");
-    void remove(int id);
-    bool exists(int id);
+    ~Storage(); // Очистка памяти Table*
+
+    bool create_table(const std::string& name);
+    void insert(const std::string& table_name, int id, const std::string& json_str);
+    std::string select(const std::string& table_name, int id, const std::string& target_key = "");
+    void remove(const std::string& table_name, int id);
+    bool exists(const std::string& table_name, int id);
 };
