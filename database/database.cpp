@@ -20,69 +20,80 @@ std::string Database::execute(const std::string& query) {
     std::stringstream ss(query);
     std::string cmd, table_name;
     
-    // 1. Извлекаем команду (CREATE, SELECT, INSERT и т.д.)
     if (!(ss >> cmd)) return "ERR_EMPTY_QUERY";
     std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
 
-    // --- Команда CREATE (не требует ID, только имя таблицы) ---
-    // Синтаксис: CREATE users
+    // Извлекаем имя таблицы (оно второе во ВСЕХ командах: CREATE, SELECT, SCHEMA...)
+    if (!(ss >> table_name)) return "ERR_MISSING_TABLE_NAME";
+    table_name = trim_cmd(table_name);
+
+    // 1. CREATE
     if (cmd == "CREATE") {
-        ss >> table_name;
-        table_name = trim_cmd(table_name);
-        if (table_name.empty()) return "ERR_INVALID_TABLE_NAME";
-        
         if (storage.create_table(table_name)) {
             return "OK: Table '" + table_name + "' created";
         }
         return "ERR_TABLE_ALREADY_EXISTS";
     }
 
-    // --- Для всех остальных команд вторым аргументом идет TABLE_NAME ---
-    if (!(ss >> table_name)) return "ERR_MISSING_TABLE_NAME";
-    table_name = trim_cmd(table_name);
+    // 2. SCHEMA
+    if (cmd == "SCHEMA") {
+        std::vector<Column> cols;
+        std::string pair;
+        while (ss >> pair) {
+            size_t colon = pair.find(':');
+            if (colon == std::string::npos) continue;
+            
+            std::string col_name = pair.substr(0, colon);
+            std::string type_str = trim_cmd(pair.substr(colon + 1));
+            
+            DataType type = DataType::STRING;
+            if (type_str == "INT") type = DataType::INT;
+            else if (type_str == "DOUBLE") type = DataType::DOUBLE;
+            else if (type_str == "BOOL") type = DataType::BOOL;
+            
+            cols.push_back({col_name, type});
+        }
+        
+        if (cols.empty()) return "ERR_EMPTY_SCHEMA";
+        if (storage.set_schema(table_name, cols)) return "OK: Schema applied";
+        return "ERR_TABLE_NOT_FOUND";
+    }
 
-    // --- Команда SELECT ---
-    // Синтаксис: SELECT users 10 name
+    // 3. SELECT
     if (cmd == "SELECT") {
         int id;
         if (!(ss >> id)) return "ERR_INVALID_ID";
-        
         std::string key;
         ss >> key;
-        key = trim_cmd(key); // Если ключа нет, вернет пустую строку (весь JSON)
-        
-        return storage.select(table_name, id, key);
+        return storage.select(table_name, id, trim_cmd(key));
     } 
 
-    // --- Команды INSERT и UPDATE ---
-    // Синтаксис: INSERT users 10 {"name":"Ivan"}
-    else if (cmd == "INSERT" || cmd == "UPDATE") {
+    // 4. INSERT / UPDATE
+    if (cmd == "INSERT" || cmd == "UPDATE") {
         int id;
         if (!(ss >> id)) return "ERR_INVALID_ID";
-        
         std::string body;
         std::getline(ss >> std::ws, body);
         body = trim_cmd(body);
         
         if (body.empty()) return "ERR_EMPTY_BODY";
-
-        // Если это INSERT, проверяем, нет ли уже такого ключа в этой таблице
         if (cmd == "INSERT" && storage.exists(table_name, id)) {
-            return "ERR_ID_EXISTS_IN_TABLE";
+            return "ERR_ID_EXISTS";
         }
         
-        storage.insert(table_name, id, body);
-        return "OK";
+        try {
+            storage.insert(table_name, id, body);
+            return "OK";
+        } catch (const std::exception& e) {
+            return std::string("ERR: ") + e.what();
+        }
     }
 
-    // --- Команда DELETE ---
-    // Синтаксис: DELETE users 10
-    else if (cmd == "DELETE") {
+    // 5. DELETE
+    if (cmd == "DELETE") {
         int id;
         if (!(ss >> id)) return "ERR_INVALID_ID";
-        
         if (!storage.exists(table_name, id)) return "ERR_NOT_FOUND";
-        
         storage.remove(table_name, id);
         return "OK";
     }

@@ -4,23 +4,20 @@
 #include <sstream>
 #include <algorithm>
 
-// Конструктор: инициализирует корневую папку и загружает существующие таблицы
 Storage::Storage() {
     if (!fs::exists(root_path)) {
-        fs::create_directory(root_path);
+        fs::create_directories(root_path);
     }
     
-    // Сканируем директорию data/ на наличие подпапок (таблиц)
+    // Сканируем папку data/ на наличие таблиц
     for (const auto& entry : fs::directory_iterator(root_path)) {
         if (entry.is_directory()) {
             std::string t_name = entry.path().filename().string();
-            // Загружаем таблицу. Если она уже на диске, create_table её подцепит
             create_table(t_name); 
         }
     }
 }
 
-// Деструктор: чистим динамическую память
 Storage::~Storage() {
     std::lock_guard<std::mutex> lock(tables_mtx);
     for (auto& [name, table] : tables) {
@@ -28,20 +25,19 @@ Storage::~Storage() {
     }
 }
 
-// Хеширование ключей (DJB2)
 uint32_t Storage::hash_string(const std::string& s) {
     uint32_t hash = 5381;
     for (char c : s) hash = ((hash << 5) + hash) + c;
     return hash;
 }
 
-// Ручной парсер JSON (строка -> map)
 std::map<std::string, std::string> Storage::parse_json_manual(std::string s) {
     std::map<std::string, std::string> res;
+    // Очистка от скобок и кавычек
     s.erase(std::remove(s.begin(), s.end(), '{'), s.end());
     s.erase(std::remove(s.begin(), s.end(), '}'), s.end());
     s.erase(std::remove(s.begin(), s.end(), '\"'), s.end());
-    
+
     std::stringstream ss(s);
     std::string item;
     while (std::getline(ss, item, ',')) {
@@ -49,7 +45,7 @@ std::map<std::string, std::string> Storage::parse_json_manual(std::string s) {
         if (colon != std::string::npos) {
             std::string k = item.substr(0, colon);
             std::string v = item.substr(colon + 1);
-            // Убираем лишние пробелы (trim)
+            // Trim пробелов
             k.erase(0, k.find_first_not_of(" ")); k.erase(k.find_last_not_of(" ") + 1);
             v.erase(0, v.find_first_not_of(" ")); v.erase(v.find_last_not_of(" ") + 1);
             res[k] = v;
@@ -58,9 +54,41 @@ std::map<std::string, std::string> Storage::parse_json_manual(std::string s) {
     return res;
 }
 
-// Упаковка данных в бинарный формат
-std::vector<char> Storage::pack_json(const std::string& json_str) {
+// Валидация типов данных (Constraints)
+bool Storage::validate_types(Table* t, const std::map<std::string, std::string>& data) {
+    if (t->schema.empty()) return true; // Если схема не задана, пропускаем всё
+
+    for (const auto& col : t->schema) {
+        // Проверка на наличие обязательного поля
+        auto it = data.find(col.name);
+        if (it == data.end()) return false; 
+
+        const std::string& val = it->second;
+        try {
+            if (col.type == DataType::INT) {
+                std::stoi(val);
+            } else if (col.type == DataType::DOUBLE) {
+                std::stod(val);
+            } else if (col.type == DataType::BOOL) {
+                if (val != "true" && val != "false" && val != "1" && val != "0") return false;
+            }
+            // STRING валидировать не нужно
+        } catch (...) {
+            return false; // Ошибка трансформации типа
+        }
+    }
+    return true;
+}
+
+// Упаковка данных в бинарный блок с учетом схемы
+std::vector<char> Storage::pack_json(const std::string& json_str, Table* t) {
     auto data = parse_json_manual(json_str);
+    
+    // Перед упаковкой проверяем типы
+    if (!validate_types(t, data)) {
+        throw std::runtime_error("ERR_CONSTRAINT_VIOLATION");
+    }
+
     data["__full__"] = json_str; 
 
     BinaryHeader head;
@@ -89,9 +117,10 @@ std::vector<char> Storage::pack_json(const std::string& json_str) {
     return buf;
 }
 
-// Создание новой таблицы (или регистрация существующей)
 bool Storage::create_table(const std::string& name) {
     std::lock_guard<std::mutex> lock(tables_mtx);
+    
+    // Если таблица уже есть в памяти — выходим
     if (tables.count(name)) return false;
 
     std::string t_path = root_path + name + "/";
@@ -102,13 +131,58 @@ bool Storage::create_table(const std::string& name) {
     Table* t = new Table();
     t->name = name;
     t->path = t_path;
-    load_table_index(t); // Загружаем индекс именно этой таблицы
     
-    tables[name] = t;
+    // ВАЖНО: сначала добавляем в список, потом загружаем остальное
+    tables[name] = t; 
+    
+    load_schema(t);
+    load_table_index(t);
+    
     return true;
 }
 
-// Вставка данных
+bool Storage::set_schema(const std::string& table_name, const std::vector<Column>& columns) {
+    std::lock_guard<std::mutex> lock(tables_mtx);
+    if (!tables.count(table_name)) return false;
+    
+    Table* t = tables[table_name];
+    t->schema = columns;
+    save_schema(t); // Сохраняем схему в _schema.bin
+    return true;
+}
+
+void Storage::save_schema(Table* t) {
+    std::ofstream out(t->path + "_schema.bin", std::ios::binary);
+    uint32_t col_count = (uint32_t)t->schema.size();
+    out.write((char*)&col_count, sizeof(uint32_t));
+
+    for (const auto& col : t->schema) {
+        uint32_t name_len = (uint32_t)col.name.size();
+        out.write((char*)&name_len, sizeof(uint32_t));
+        out.write(col.name.c_str(), name_len);
+        out.write((char*)&col.type, sizeof(DataType));
+    }
+}
+
+void Storage::load_schema(Table* t) {
+    std::ifstream in(t->path + "_schema.bin", std::ios::binary);
+    if (!in.is_open()) return;
+
+    uint32_t col_count;
+    if (!in.read((char*)&col_count, sizeof(uint32_t))) return;
+
+    t->schema.clear();
+    for (uint32_t i = 0; i < col_count; ++i) {
+        uint32_t name_len;
+        in.read((char*)&name_len, sizeof(uint32_t));
+        std::string name(name_len, ' ');
+        in.read(&name[0], name_len);
+        DataType type;
+        in.read((char*)&type, sizeof(DataType));
+        t->schema.push_back({name, type});
+    }
+}
+
 void Storage::insert(const std::string& table_name, int id, const std::string& json_str) {
     Table* t = nullptr;
     {
@@ -117,26 +191,28 @@ void Storage::insert(const std::string& table_name, int id, const std::string& j
         t = tables[table_name];
     }
 
-    // Блокируем только конкретную таблицу
     std::lock_guard<std::mutex> t_lock(t->mtx);
     
-    std::vector<char> bin = pack_json(json_str);
+    // 1. Прямой вызов. Если типы не совпадут, pack_json сам кинет исключение.
+    std::vector<char> bin = pack_json(json_str, t);
+
+    // 2. Запись на диск
     std::string fname = t->path + "seg_" + std::to_string(t->current_seg_id) + ".db";
+    std::ofstream out(fname, std::ios::binary | std::ios::app); // Используем app для простоты
 
-    std::ofstream out(fname, std::ios::binary | std::ios::in | std::ios::out | std::ios::ate);
-    if (!out.is_open()) {
-        out.open(fname, std::ios::binary | std::ios::out);
-    }
+    if (!out.is_open()) throw std::runtime_error("Could not open file for writing");
 
-    out.seekp(0, std::ios::end);
     std::streampos pos = out.tellp(); 
 
     uint32_t len = (uint32_t)bin.size();
     out.write((char*)&id, sizeof(int));
     out.write((char*)&len, sizeof(uint32_t));
     out.write(bin.data(), bin.size());
-    out.flush(); 
+    
+    out.flush();
+    out.close(); // <--- ОБЯЗАТЕЛЬНО закрываем, чтобы SELECT мог прочитать
 
+    // 3. Обновляем индекс только ПОСЛЕ успешной записи
     t->index[id] = { fname, pos };
 
     if (pos > (std::streamoff)MAX_SEG_SIZE) {
@@ -144,7 +220,6 @@ void Storage::insert(const std::string& table_name, int id, const std::string& j
     }
 }
 
-// Поиск данных
 std::string Storage::select(const std::string& table_name, int id, const std::string& target_key) {
     Table* t = nullptr;
     {
@@ -169,8 +244,7 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
 
     BinaryHeader head;
     in.read((char*)&head, sizeof(BinaryHeader));
-    if (head.magic != 0x4A423031) return "ERR_CORRUPT_FORMAT";
-
+    
     std::string to_find = target_key.empty() ? "__full__" : target_key;
     uint32_t h = hash_string(to_find);
 
@@ -178,18 +252,19 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
         KeyRecord r;
         in.read((char*)&r, sizeof(KeyRecord));
         if (r.key_hash == h) {
-            size_t p = (size_t)loc.offset + sizeof(int) + sizeof(uint32_t) + 
-                       sizeof(BinaryHeader) + (head.keys_count * sizeof(KeyRecord)) + r.data_offset;
-            in.seekg(p);
-            std::string res(r.data_size, ' ');
-            in.read(&res[0], r.data_size);
-            return res;
-        }
+        // Смещение данных: начало записи + заголовок + массив записей ключей + смещение конкретного ключа
+        size_t header_offset = sizeof(int) + sizeof(uint32_t) + sizeof(BinaryHeader) + (head.keys_count * sizeof(KeyRecord));
+        in.seekg((size_t)loc.offset + header_offset + r.data_offset);
+        
+        std::string res(r.data_size, ' ');
+        in.read(&res[0], r.data_size);
+        return res;
+}
     }
     return "ERR_KEY_NOT_FOUND";
 }
 
-// Загрузка индекса для конкретной таблицы
+
 void Storage::load_table_index(Table* t) {
     int sid = 0;
     while (fs::exists(t->path + "seg_" + std::to_string(sid) + ".db")) {
