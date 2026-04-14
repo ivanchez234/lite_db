@@ -8,4 +8,5 @@ private:
 public:
     Database(const std::string& filename);
     std::string execute(const std::string& query);
+    void load_config(const std::string& filename);
 };

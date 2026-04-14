@@ -1,0 +1,15 @@
+tables:
+  - name: use
+    schema:
+      - name: STRING
+      - age: INT
+      - is_active: BOOL
+  - name: products
+    schema:
+      - title: STRING
+      - price: DOUBLE
+  - name: prod
+    schema:
+      - title: STRING
+      - price: DOUBLE
+      - sale: DOUBLE

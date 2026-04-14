@@ -2,6 +2,7 @@
 #include <sstream>
 #include <algorithm>
 #include <iostream>
+#include <fstream>
 
 // Вспомогательная функция для очистки строк от мусора
 std::string trim_cmd(const std::string& s) {
@@ -16,6 +17,67 @@ Database::Database(const std::string& dummy) {
     // Параметр конструктора можно оставить для совместимости
 }
 
+void Database::load_config(const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cout << "[Config] No setup.yaml found, skipping auto-init." << std::endl;
+        return;
+    }
+
+    std::string line, current_table;
+    std::vector<Column> current_cols;
+    bool in_schema = false; // Флаг: находимся ли мы внутри блока schema:
+
+    while (std::getline(file, line)) {
+        // Пропускаем совсем пустые строки
+        if (line.find_first_not_of(" \t\n\r") == std::string::npos) continue;
+
+        // 1. Проверяем отступ (количество пробелов в начале)
+        size_t indent = line.find_first_not_of(' ');
+
+        // 2. Если нашли "- name:" с МАЛЕНЬКИМ отступом (обычно 2) — это новая ТАБЛИЦА
+        if (line.find("- name:") != std::string::npos && indent < 4) {
+            // Сохраняем предыдущую таблицу перед переключением
+            if (!current_table.empty() && !current_cols.empty()) {
+                storage.create_table(current_table);
+                storage.set_schema(current_table, current_cols);
+                std::cout << "[Config] Table '" << current_table << "' initialized from YAML." << std::endl;
+            }
+            
+            current_table = trim_cmd(line.substr(line.find(":") + 1));
+            current_cols.clear();
+            in_schema = false; // Сбрасываем флаг схемы, так как началась новая таблица
+        } 
+        // 3. Если встретили ключевое слово "schema:" — переходим в режим чтения колонок
+        else if (line.find("schema:") != std::string::npos) {
+            in_schema = true;
+        }
+        // 4. Если мы в режиме схемы и видим строку, начинающуюся с "- " — это КОЛОНКА
+        else if (in_schema && line.find("- ") != std::string::npos) {
+            size_t colon = line.find(":");
+            if (colon != std::string::npos) {
+                // Извлекаем имя колонки (между "- " и ":")
+                size_t dash_pos = line.find("- ");
+                std::string col_name = trim_cmd(line.substr(dash_pos + 2, colon - (dash_pos + 2)));
+                std::string type_str = trim_cmd(line.substr(colon + 1));
+
+                DataType type = DataType::STRING;
+                if (type_str == "INT") type = DataType::INT;
+                else if (type_str == "DOUBLE") type = DataType::DOUBLE;
+                else if (type_str == "BOOL") type = DataType::BOOL;
+
+                current_cols.push_back({col_name, type});
+            }
+        }
+    }
+
+    // Сохраняем самую последнюю таблицу из файла (она всегда выводится здесь)
+    if (!current_table.empty() && !current_cols.empty()) {
+        storage.create_table(current_table);
+        storage.set_schema(current_table, current_cols);
+        std::cout << "[Config] Table '" << current_table << "' initialized from YAML." << std::endl;
+    }
+}
 std::string Database::execute(const std::string& query) {
     std::stringstream ss(query);
     std::string cmd, table_name;
@@ -85,6 +147,7 @@ std::string Database::execute(const std::string& query) {
             return "ERR_INVALID_ID_OR_COMMAND (Expected INT or ALL)";
         }
     }
+
 
     // 4. INSERT / UPDATE
     if (cmd == "INSERT" || cmd == "UPDATE") {
