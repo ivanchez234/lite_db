@@ -54,6 +54,30 @@ std::map<std::string, std::string> Storage::parse_json_manual(std::string s) {
     return res;
 }
 
+bool is_valid_date(const std::string& date) {
+    // 1. Проверяем длину: ровно 10 символов (YYYY-MM-DD)
+    if (date.length() != 10) return false;
+
+    // 2. Проверяем наличие дефисов на правильных местах
+    if (date[4] != '-' || date[7] != '-') return false;
+
+    // 3. Проверяем, что остальные символы — это цифры
+    for (int i = 0; i < 10; ++i) {
+        if (i == 4 || i == 7) continue;
+        if (!std::isdigit(date[i])) return false;
+    }
+
+    // 4. Логическая проверка месяцев и дней
+    int month = std::stoi(date.substr(5, 2));
+    int day = std::stoi(date.substr(8, 2));
+
+    if (month < 1 || month > 12) return false;
+    if (day < 1 || day > 31) return false; 
+    // Для идеала можно добавить проверку на 28/30 дней, но пока хватит и этого
+
+    return true;
+}
+
 // Валидация типов данных (Constraints)
 bool Storage::validate_types(Table* t, const std::map<std::string, std::string>& data) {
     if (t->schema.empty()) return true; // Если схема не задана, пропускаем всё
@@ -71,6 +95,13 @@ bool Storage::validate_types(Table* t, const std::map<std::string, std::string>&
                 std::stod(val);
             } else if (col.type == DataType::BOOL) {
                 if (val != "true" && val != "false" && val != "1" && val != "0") return false;
+            }
+            else if (col.type == DataType::DATE)
+            {
+                if (!is_valid_date(val))
+                {
+                    return false;
+                }
             }
             // STRING валидировать не нужно
         } catch (...) {

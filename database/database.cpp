@@ -65,6 +65,7 @@ void Database::load_config(const std::string& filename) {
                 if (type_str == "INT") type = DataType::INT;
                 else if (type_str == "DOUBLE") type = DataType::DOUBLE;
                 else if (type_str == "BOOL") type = DataType::BOOL;
+                else if (type_str == "DATE") type = DataType::DATE;
 
                 current_cols.push_back({col_name, type});
             }

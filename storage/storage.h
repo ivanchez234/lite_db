@@ -10,7 +10,7 @@
 namespace fs = std::filesystem;
 
 // Поддерживаемые типы данных
-enum class DataType { STRING, INT, DOUBLE, BOOL };
+enum class DataType { STRING, INT, DOUBLE, BOOL, DATE };
 
 struct Column {
     std::string name;

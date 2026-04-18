@@ -13,3 +13,7 @@ tables:
       - title: STRING
       - price: DOUBLE
       - sale: DOUBLE
+  - name: events
+    schema:
+      - title: STRING
+      - event_date: DATE
