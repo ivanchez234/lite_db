@@ -1,0 +1,32 @@
+[
+{
+  "directory": "C:/code/lite_db/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/server_app.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\server_app.dir\\database\\database.cpp.obj -c C:\\code\\lite_db\\database\\database.cpp",
+  "file": "C:/code/lite_db/database/database.cpp",
+  "output": "CMakeFiles/server_app.dir/database/database.cpp.obj"
+},
+{
+  "directory": "C:/code/lite_db/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/server_app.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\server_app.dir\\main.cpp.obj -c C:\\code\\lite_db\\main.cpp",
+  "file": "C:/code/lite_db/main.cpp",
+  "output": "CMakeFiles/server_app.dir/main.cpp.obj"
+},
+{
+  "directory": "C:/code/lite_db/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/server_app.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\server_app.dir\\server\\tcp_server.cpp.obj -c C:\\code\\lite_db\\server\\tcp_server.cpp",
+  "file": "C:/code/lite_db/server/tcp_server.cpp",
+  "output": "CMakeFiles/server_app.dir/server/tcp_server.cpp.obj"
+},
+{
+  "directory": "C:/code/lite_db/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/server_app.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\server_app.dir\\storage\\storage.cpp.obj -c C:\\code\\lite_db\\storage\\storage.cpp",
+  "file": "C:/code/lite_db/storage/storage.cpp",
+  "output": "CMakeFiles/server_app.dir/storage/storage.cpp.obj"
+},
+{
+  "directory": "C:/code/lite_db/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe  @CMakeFiles/client_app.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\client_app.dir\\client.cpp.obj -c C:\\code\\lite_db\\client.cpp",
+  "file": "C:/code/lite_db/client.cpp",
+  "output": "CMakeFiles/client_app.dir/client.cpp.obj"
+}
+]

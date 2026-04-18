@@ -6,11 +6,18 @@
 #include <mutex>
 #include <fstream>
 #include <filesystem>
+#include <lz4.h>
 
 namespace fs = std::filesystem;
 
 // Поддерживаемые типы данных
 enum class DataType { STRING, INT, DOUBLE, BOOL, DATE };
+
+// Заголовок блока, который будет записываться в файл
+struct CompressedBlockHeader {
+    uint32_t original_size;   // Размер данных до сжатия
+    uint32_t compressed_size; // Размер данных после сжатия
+};
 
 struct Column {
     std::string name;
@@ -43,6 +50,9 @@ struct Table {
     std::vector<Column> schema; // Тот самый бинарный паспорт в памяти
     std::unordered_map<int, FileLocation> index;
     std::mutex mtx;
+    // Блочное сжатие
+    std::vector<char> write_buffer; 
+    const size_t BLOCK_SIZE = 4096; // 4 КБ — стандартный размер блока
 };
 
 class Storage {
@@ -75,4 +85,10 @@ public:
     std::string select_all(const std::string& table_name);
     void remove(const std::string& table_name, int id);
     bool exists(const std::string& table_name, int id);
+    std::unordered_map<std::string, Table*>& get_all_tables() {
+        return tables;
+    }
+// В класс Storage добавь эти методы:
+    void flush_block_to_disk(Table* t);
+    void insert_to_block(Table* t, const std::vector<char>& raw_record);
 };

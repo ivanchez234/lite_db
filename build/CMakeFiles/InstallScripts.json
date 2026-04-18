@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/code/lite_db/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

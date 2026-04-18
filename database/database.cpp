@@ -16,6 +16,13 @@ Database::Database(const std::string& dummy) {
     // В новой архитектуре Storage сам управляет папкой data/
     // Параметр конструктора можно оставить для совместимости
 }
+Database::~Database() {
+    std::cout << "[System] Flushing buffers to disk before shutdown..." << std::endl;
+    // Проходим по всем таблицам и вызываем принудительный сброс
+    for (auto& pair : storage.get_all_tables()) { 
+        storage.flush_block_to_disk(pair.second); 
+    }
+}
 
 void Database::load_config(const std::string& filename) {
     std::ifstream file(filename);
@@ -86,6 +93,13 @@ std::string Database::execute(const std::string& query) {
     if (!(ss >> cmd)) return "ERR_EMPTY_QUERY";
     std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
 
+    // 0. FLUSH - принудительный сброс буферов
+    if (cmd == "FLUSH") {
+        for (auto& pair : storage.get_all_tables()) {
+            storage.flush_block_to_disk(pair.second);
+        }
+        return "OK: All buffers flushed to disk";
+    }
     // Извлекаем имя таблицы (оно второе во ВСЕХ командах: CREATE, SELECT, SCHEMA...)
     if (!(ss >> table_name)) return "ERR_MISSING_TABLE_NAME";
     table_name = trim_cmd(table_name);

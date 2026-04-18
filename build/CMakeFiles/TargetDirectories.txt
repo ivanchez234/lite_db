@@ -1,0 +1,4 @@
+C:/code/lite_db/build/CMakeFiles/server_app.dir
+C:/code/lite_db/build/CMakeFiles/client_app.dir
+C:/code/lite_db/build/CMakeFiles/edit_cache.dir
+C:/code/lite_db/build/CMakeFiles/rebuild_cache.dir

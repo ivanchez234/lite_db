@@ -38,7 +38,11 @@ int main() {
         
         char buf[1024] = {0};
         int bytes = recv(sock, buf, 1024, 0);
-        if (bytes > 0) std::cout << "Server: " << buf << std::endl;
+        if (bytes <= 0) {
+            std::cout << "Server disconnected." << std::endl;
+            break;
+        }
+        std::cout << "Server: " << buf << std::endl;
     }
 
     closesocket(sock);
