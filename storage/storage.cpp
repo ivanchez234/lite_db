@@ -57,10 +57,21 @@ void Storage::insert_to_block(Table* t, const std::vector<char>& raw_record) {
 void Storage::flush_block_to_disk(Table* t) {
     if (t->write_buffer.empty()) return;
 
+    // 1. УМНАЯ ПРОВЕРКА ЛИМИТА ДО ОТКРЫТИЯ ФАЙЛА
     std::string path = t->path + "seg_" + std::to_string(t->current_seg_id) + ".db";
-    std::ofstream file(path, std::ios::binary | std::ios::app);
-    std::streampos block_start = file.tellp(); 
+    
+    // Если текущий файл уже существует и его размер перевалил за MAX_SEG_SIZE (300 байт)
+    if (fs::exists(path) && fs::file_size(path) >= MAX_SEG_SIZE) {
+        t->current_seg_id++; // Увеличиваем номер сегмента
+        path = t->path + "seg_" + std::to_string(t->current_seg_id) + ".db"; // Обновляем путь!
+    }
 
+    // 2. ОТКРЫВАЕМ ФАЙЛ (теперь мы точно знаем, что пишем в правильный)
+    std::ofstream file(path, std::ios::binary | std::ios::app);
+    file.seekp(0, std::ios::end);
+    std::streampos block_start = file.tellp(); // Запоминаем позицию для индекса
+
+    // 3. СЖАТИЕ И ЗАПИСЬ
     std::vector<char> compressed = compress_block(t->write_buffer);
 
     CompressedBlockHeader header;
@@ -70,6 +81,7 @@ void Storage::flush_block_to_disk(Table* t) {
     file.write(reinterpret_cast<char*>(&header), sizeof(header));
     file.write(compressed.data(), compressed.size());
 
+    // 4. ОБНОВЛЕНИЕ ИНДЕКСА
     size_t offset = 0;
     while (offset < t->write_buffer.size()) {
         uint32_t rec_sz;
@@ -78,8 +90,9 @@ void Storage::flush_block_to_disk(Table* t) {
         memcpy(&id, t->write_buffer.data() + offset + sizeof(uint32_t), sizeof(int));
         
         if (rec_sz == sizeof(int)) {
-            t->index.erase(id); // Удаляем, если это Надгробие
+            t->index.erase(id); // Удаляем из индекса, если надгробие
         } else {
+            // Пишем актуальный путь (path) и смещение
             t->index[id] = { path, block_start };
         }
         offset += sizeof(uint32_t) + rec_sz;
