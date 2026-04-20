@@ -18,10 +18,54 @@ Database::Database(const std::string& dummy) {
 }
 Database::~Database() {
     std::cout << "[System] Flushing buffers to disk before shutdown..." << std::endl;
-    // Проходим по всем таблицам и вызываем принудительный сброс
     for (auto& pair : storage.get_all_tables()) { 
         storage.flush_block_to_disk(pair.second); 
     }
+    clear_wal(); // Данные надежно на диске, черновик можно сжечь!
+}
+
+// --- РЕАЛИЗАЦИЯ WAL ---
+
+void Database::append_to_wal(const std::string& query) {
+    if (is_recovering) return; // Во время восстановления лог не пишем
+    
+    // Открываем файл в режиме добавления (app)
+    std::ofstream wal("wal.log", std::ios::app);
+    if (wal.is_open()) {
+        wal << query << "\n";
+        wal.flush(); // ГАРАНТИРУЕМ, что ОС сбросила текст на диск
+    }
+}
+
+void Database::clear_wal() {
+    // Открытие с флагом trunc мгновенно стирает содержимое файла
+    std::ofstream wal("wal.log", std::ios::trunc); 
+}
+
+void Database::recover_from_wal() {
+    std::ifstream wal("wal.log");
+    if (!wal.is_open()) return; // Лога нет, значит всё закрылось штатно
+
+    // Проверяем, не пустой ли файл
+    wal.seekg(0, std::ios::end);
+    if (wal.tellg() == 0) return;
+    wal.seekg(0, std::ios::beg);
+
+    std::cout << "\n[WAL] Crash detected! Found uncommitted operations." << std::endl;
+    std::cout << "[WAL] Replaying log to restore Write Buffer..." << std::endl;
+    
+    is_recovering = true; // Включаем режим восстановления
+    std::string line;
+    int count = 0;
+    
+    while (std::getline(wal, line)) {
+        if (line.empty()) continue;
+        execute(line); // "Скармливаем" команду базе, будто её прислал клиент!
+        count++;
+    }
+    
+    is_recovering = false; // Выключаем режим
+    std::cout << "[WAL] Successfully recovered " << count << " operations!\n" << std::endl;
 }
 
 void Database::load_config(const std::string& filename) {
@@ -98,9 +142,13 @@ std::string Database::execute(const std::string& query) {
         for (auto& pair : storage.get_all_tables()) {
             storage.flush_block_to_disk(pair.second);
         }
+        clear_wal(); // <--- ОБЯЗАТЕЛЬНО: Очищаем WAL после успешного сброса
         return "OK: All buffers flushed to disk";
     }
-    // Извлекаем имя таблицы (оно второе во ВСЕХ командах: CREATE, SELECT, SCHEMA...)
+
+    
+
+    // Извлекаем имя таблицы...
     if (!(ss >> table_name)) return "ERR_MISSING_TABLE_NAME";
     table_name = trim_cmd(table_name);
 
@@ -179,6 +227,7 @@ std::string Database::execute(const std::string& query) {
         
         try {
             storage.insert(table_name, id, body);
+            append_to_wal(query); // <--- ПИШЕМ ЛОГ ТОЛЬКО ПОСЛЕ УСПЕШНОЙ ВСТАВКИ
             return "OK";
         } catch (const std::exception& e) {
             return std::string("ERR: ") + e.what();
@@ -191,6 +240,7 @@ std::string Database::execute(const std::string& query) {
         if (!(ss >> id)) return "ERR_INVALID_ID";
         if (!storage.exists(table_name, id)) return "ERR_NOT_FOUND";
         storage.remove(table_name, id);
+        append_to_wal(query); // <--- ПИШЕМ ЛОГ ПОСЛЕ УСПЕШНОГО УДАЛЕНИЯ
         return "OK";
     }
 
