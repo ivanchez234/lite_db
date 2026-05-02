@@ -2,10 +2,10 @@
 	"artifacts" : 
 	[
 		{
-			"path" : "client_app.exe"
+			"path" : "server_app.exe"
 		},
 		{
-			"path" : "client_app.pdb"
+			"path" : "server_app.pdb"
 		}
 	],
 	"backtrace" : 1,
@@ -15,6 +15,7 @@
 		[
 			"add_executable",
 			"target_link_libraries",
+			"add_definitions",
 			"include_directories"
 		],
 		"files" : 
@@ -29,19 +30,25 @@
 			{
 				"command" : 0,
 				"file" : 0,
-				"line" : 31,
+				"line" : 33,
 				"parent" : 0
 			},
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 33,
+				"line" : 38,
 				"parent" : 0
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 7,
+				"line" : 29,
+				"parent" : 0
+			},
+			{
+				"command" : 3,
+				"file" : 0,
+				"line" : 8,
 				"parent" : 0
 			}
 		]
@@ -55,26 +62,33 @@
 					"fragment" : "-g -std=gnu++17"
 				}
 			],
-			"includes" : 
+			"defines" : 
 			[
 				{
 					"backtrace" : 3,
+					"define" : "_WIN32_WINNT=0x0601"
+				}
+			],
+			"includes" : 
+			[
+				{
+					"backtrace" : 4,
 					"path" : "C:/code/lite_db"
 				},
 				{
-					"backtrace" : 3,
+					"backtrace" : 4,
 					"path" : "C:/code/lite_db/external/include"
 				},
 				{
-					"backtrace" : 3,
+					"backtrace" : 4,
 					"path" : "C:/code/lite_db/database"
 				},
 				{
-					"backtrace" : 3,
+					"backtrace" : 4,
 					"path" : "C:/code/lite_db/storage"
 				},
 				{
-					"backtrace" : 3,
+					"backtrace" : 4,
 					"path" : "C:/code/lite_db/server"
 				}
 			],
@@ -89,11 +103,14 @@
 			},
 			"sourceIndexes" : 
 			[
-				0
+				0,
+				1,
+				2,
+				3
 			]
 		}
 	],
-	"id" : "client_app::@6890427a1f51a3e7e1df",
+	"id" : "server_app::@6890427a1f51a3e7e1df",
 	"link" : 
 	{
 		"commandFragments" : 
@@ -101,6 +118,15 @@
 			{
 				"fragment" : "-g",
 				"role" : "flags"
+			},
+			{
+				"fragment" : "-static -static-libgcc -static-libstdc++",
+				"role" : "flags"
+			},
+			{
+				"backtrace" : 2,
+				"fragment" : "C:\\code\\lite_db\\external\\lib\\liblz4_static.lib",
+				"role" : "libraries"
 			},
 			{
 				"backtrace" : 2,
@@ -114,8 +140,8 @@
 		],
 		"language" : "CXX"
 	},
-	"name" : "client_app",
-	"nameOnDisk" : "client_app.exe",
+	"name" : "server_app",
+	"nameOnDisk" : "server_app.exe",
 	"paths" : 
 	{
 		"build" : ".",
@@ -127,7 +153,10 @@
 			"name" : "Source Files",
 			"sourceIndexes" : 
 			[
-				0
+				0,
+				1,
+				2,
+				3
 			]
 		}
 	],
@@ -136,7 +165,25 @@
 		{
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
-			"path" : "client.cpp",
+			"path" : "database/database.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "main.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "server/tcp_server.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "storage/storage.cpp",
 			"sourceGroupIndex" : 0
 		}
 	],

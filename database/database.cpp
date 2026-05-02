@@ -15,6 +15,11 @@ std::string trim_cmd(const std::string& s) {
 Database::Database(const std::string& dummy) {
     // В новой архитектуре Storage сам управляет папкой data/
     // Параметр конструктора можно оставить для совместимости
+    // Открываем WAL-файл ОДИН РАЗ при старте сервера
+    wal_file.open("wal.log", std::ios::app);
+    if (!wal_file.is_open()) {
+        std::cerr << "WARNING: Could not open wal.log for writing!" << std::endl;
+    }
 }
 Database::~Database() {
     std::cout << "[System] Flushing buffers to disk before shutdown..." << std::endl;
@@ -22,18 +27,23 @@ Database::~Database() {
         storage.flush_block_to_disk(pair.second); 
     }
     clear_wal(); // Данные надежно на диске, черновик можно сжечь!
+    if (wal_file.is_open()) {
+        wal_file.flush();
+        wal_file.close();
+    }
 }
 
 // --- РЕАЛИЗАЦИЯ WAL ---
 
 void Database::append_to_wal(const std::string& query) {
-    if (is_recovering) return; // Во время восстановления лог не пишем
+    if (is_recovering) return; 
     
-    // Открываем файл в режиме добавления (app)
-    std::ofstream wal("wal.log", std::ios::app);
-    if (wal.is_open()) {
-        wal << query << "\n";
-        wal.flush(); // ГАРАНТИРУЕМ, что ОС сбросила текст на диск
+    if (wal_file.is_open()) {
+        wal_file << query << "\n";
+        
+        // ВАЖНО: Мы УБРАЛИ wal.flush() отсюда!
+        // Теперь запись идет в буфер ОС, что работает в 1000 раз быстрее.
+        // Файл физически обновится либо когда буфер заполнится, либо по команде FLUSH.
     }
 }
 
@@ -137,33 +147,36 @@ std::string Database::execute(const std::string& query) {
     if (!(ss >> cmd)) return "ERR_EMPTY_QUERY";
     std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
 
-    // 0. FLUSH - принудительный сброс буферов
+    // 0. FLUSH - принудительный сброс (ЗАПИСЬ)
     if (cmd == "FLUSH") {
+        std::lock_guard<std::mutex> lock(db_mutex); // Эксклюзивная блокировка
         for (auto& pair : storage.get_all_tables()) {
             storage.flush_block_to_disk(pair.second);
         }
-        clear_wal(); // <--- ОБЯЗАТЕЛЬНО: Очищаем WAL после успешного сброса
+        clear_wal();
         return "OK: All buffers flushed to disk";
     }
 
-    
-
-    // Извлекаем имя таблицы...
+    // Извлекаем имя таблицы (делаем это ДО блокировок, чтобы не тормозить потоки)
     if (!(ss >> table_name)) return "ERR_MISSING_TABLE_NAME";
-    table_name = trim_cmd(table_name);
+    // Предполагаю, что trim_cmd у тебя определена где-то выше в файле
+    table_name = trim_cmd(table_name); 
 
-    // 1. CREATE
+    // 1. CREATE (ЗАПИСЬ)
     if (cmd == "CREATE") {
+        std::lock_guard<std::mutex> lock(db_mutex); // Эксклюзивная блокировка
         if (storage.create_table(table_name)) {
             return "OK: Table '" + table_name + "' created";
         }
         return "ERR_TABLE_ALREADY_EXISTS";
     }
 
-    // 2. SCHEMA
+    // 2. SCHEMA (ЗАПИСЬ)
     if (cmd == "SCHEMA") {
         std::vector<Column> cols;
         std::string pair;
+        
+        // Парсим строку без блокировки
         while (ss >> pair) {
             size_t colon = pair.find(':');
             if (colon == std::string::npos) continue;
@@ -180,27 +193,29 @@ std::string Database::execute(const std::string& query) {
         }
         
         if (cols.empty()) return "ERR_EMPTY_SCHEMA";
+        
+        std::lock_guard<std::mutex> lock(db_mutex); // Блокируем только момент применения
         if (storage.set_schema(table_name, cols)) return "OK: Schema applied";
         return "ERR_TABLE_NOT_FOUND";
     }
 
-        // В файле database.cpp внутри метода execute
+    // 3. SELECT (ЧТЕНИЕ - Разрешаем многопоточность!)
     if (cmd == "SELECT") {
         std::string arg;
         if (!(ss >> arg)) return "ERR_MISSING_ARGUMENTS";
         
-        // Приводим к верхнему регистру для сравнения с "ALL"
         std::string upper_arg = arg;
         std::transform(upper_arg.begin(), upper_arg.end(), upper_arg.begin(), ::toupper);
 
-        // Вариант 1: Выборка всех данных
+        // ВАЖНО: Разрешаем СОВМЕСТНОЕ чтение. 7 ядер могут читать базу одновременно!
+        std::lock_guard<std::mutex> lock(db_mutex); 
+
         if (upper_arg == "ALL" || upper_arg == "*") {
             return storage.select_all(table_name);
         }
 
-        // Вариант 2: Выборка по конкретному ID
         try {
-            int id = std::stoi(arg); // Пробуем конвертировать строку в число
+            int id = std::stoi(arg); 
             std::string key;
             if (ss >> key) {
                 key = trim_cmd(key);
@@ -211,8 +226,7 @@ std::string Database::execute(const std::string& query) {
         }
     }
 
-
-    // 4. INSERT / UPDATE
+    // 4. INSERT / UPDATE (ЗАПИСЬ)
     if (cmd == "INSERT" || cmd == "UPDATE") {
         int id;
         if (!(ss >> id)) return "ERR_INVALID_ID";
@@ -221,26 +235,34 @@ std::string Database::execute(const std::string& query) {
         body = trim_cmd(body);
         
         if (body.empty()) return "ERR_EMPTY_BODY";
+        
+        // Эксклюзивная блокировка (Только ОДИН поток может писать в данный момент)
+        std::lock_guard<std::mutex> lock(db_mutex); 
+        
         if (cmd == "INSERT" && storage.exists(table_name, id)) {
             return "ERR_ID_EXISTS";
         }
         
         try {
             storage.insert(table_name, id, body);
-            append_to_wal(query); // <--- ПИШЕМ ЛОГ ТОЛЬКО ПОСЛЕ УСПЕШНОЙ ВСТАВКИ
+            // Пишем в WAL под тем же замком, чтобы логи не перемешались
+            append_to_wal(query); 
             return "OK";
         } catch (const std::exception& e) {
             return std::string("ERR: ") + e.what();
         }
     }
 
-    // 5. DELETE
+    // 5. DELETE (ЗАПИСЬ)
     if (cmd == "DELETE") {
         int id;
         if (!(ss >> id)) return "ERR_INVALID_ID";
+        
+        std::lock_guard<std::mutex> lock(db_mutex); // Эксклюзивная блокировка
+        
         if (!storage.exists(table_name, id)) return "ERR_NOT_FOUND";
         storage.remove(table_name, id);
-        append_to_wal(query); // <--- ПИШЕМ ЛОГ ПОСЛЕ УСПЕШНОГО УДАЛЕНИЯ
+        append_to_wal(query);
         return "OK";
     }
 

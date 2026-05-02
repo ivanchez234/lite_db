@@ -58,9 +58,9 @@ struct Table {
 class Storage {
 private:
     std::string root_path = "data/";
-    const size_t MAX_SEG_SIZE = 1024 * 1024;
+    const size_t MAX_SEG_SIZE = 10 * 1024 * 1024;
     std::unordered_map<std::string, Table*> tables;
-    std::mutex tables_mtx;
+    std::mutex tables_mtx;  
 
     std::map<std::string, std::string> parse_json_manual(std::string s);
     uint32_t hash_string(const std::string& s);
