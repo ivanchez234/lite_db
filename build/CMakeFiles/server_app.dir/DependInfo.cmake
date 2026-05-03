@@ -8,6 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "C:/code/lite_db/Orm/sql_parser.cpp" "CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj" "gcc" "CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj.d"
   "C:/code/lite_db/database/database.cpp" "CMakeFiles/server_app.dir/database/database.cpp.obj" "gcc" "CMakeFiles/server_app.dir/database/database.cpp.obj.d"
   "C:/code/lite_db/main.cpp" "CMakeFiles/server_app.dir/main.cpp.obj" "gcc" "CMakeFiles/server_app.dir/main.cpp.obj.d"
   "C:/code/lite_db/server/tcp_server.cpp" "CMakeFiles/server_app.dir/server/tcp_server.cpp.obj" "gcc" "CMakeFiles/server_app.dir/server/tcp_server.cpp.obj.d"

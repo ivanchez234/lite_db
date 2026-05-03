@@ -1,6 +1,12 @@
 [
 {
   "directory": "C:/code/lite_db/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -D_WIN32_WINNT=0x0601 @CMakeFiles/server_app.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\server_app.dir\\Orm\\sql_parser.cpp.obj -c C:\\code\\lite_db\\Orm\\sql_parser.cpp",
+  "file": "C:/code/lite_db/Orm/sql_parser.cpp",
+  "output": "CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj"
+},
+{
+  "directory": "C:/code/lite_db/build",
   "command": "C:\\msys64\\ucrt64\\bin\\g++.exe -D_WIN32_WINNT=0x0601 @CMakeFiles/server_app.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\server_app.dir\\database\\database.cpp.obj -c C:\\code\\lite_db\\database\\database.cpp",
   "file": "C:/code/lite_db/database/database.cpp",
   "output": "CMakeFiles/server_app.dir/database/database.cpp.obj"

@@ -141,6 +141,30 @@ client_app/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\client_app.dir\build.make CMakeFiles/client_app.dir/build
 .PHONY : client_app/fast
 
+Orm/sql_parser.obj: Orm/sql_parser.cpp.obj
+.PHONY : Orm/sql_parser.obj
+
+# target to build an object file
+Orm/sql_parser.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\server_app.dir\build.make CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj
+.PHONY : Orm/sql_parser.cpp.obj
+
+Orm/sql_parser.i: Orm/sql_parser.cpp.i
+.PHONY : Orm/sql_parser.i
+
+# target to preprocess a source file
+Orm/sql_parser.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\server_app.dir\build.make CMakeFiles/server_app.dir/Orm/sql_parser.cpp.i
+.PHONY : Orm/sql_parser.cpp.i
+
+Orm/sql_parser.s: Orm/sql_parser.cpp.s
+.PHONY : Orm/sql_parser.s
+
+# target to generate assembly for a file
+Orm/sql_parser.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\server_app.dir\build.make CMakeFiles/server_app.dir/Orm/sql_parser.cpp.s
+.PHONY : Orm/sql_parser.cpp.s
+
 client.obj: client.cpp.obj
 .PHONY : client.obj
 
@@ -271,6 +295,9 @@ help:
 	@echo ... rebuild_cache
 	@echo ... client_app
 	@echo ... server_app
+	@echo ... Orm/sql_parser.obj
+	@echo ... Orm/sql_parser.i
+	@echo ... Orm/sql_parser.s
 	@echo ... client.obj
 	@echo ... client.i
 	@echo ... client.s

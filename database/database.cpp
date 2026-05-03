@@ -1,8 +1,10 @@
 #include "database.h"
+#include "../Orm/sql_parser.h"
 #include <sstream>
 #include <algorithm>
 #include <iostream>
 #include <fstream>
+
 
 // Вспомогательная функция для очистки строк от мусора
 std::string trim_cmd(const std::string& s) {
@@ -140,7 +142,12 @@ void Database::load_config(const std::string& filename) {
         std::cout << "[Config] Table '" << current_table << "' initialized from YAML." << std::endl;
     }
 }
-std::string Database::execute(const std::string& query) {
+std::string Database::execute(const std::string& raw_query) {
+    // 1. Прогоняем сырой запрос через наш SQL Транслятор
+    std::string query = SQLParser::translate(raw_query);
+
+    if (query.find("ERR") == 0) return query;
+    
     std::stringstream ss(query);
     std::string cmd, table_name;
     

@@ -71,11 +71,26 @@ include CMakeFiles/server_app.dir/flags.make
 CMakeFiles/server_app.dir/codegen:
 .PHONY : CMakeFiles/server_app.dir/codegen
 
+CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj: CMakeFiles/server_app.dir/flags.make
+CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj: CMakeFiles/server_app.dir/includes_CXX.rsp
+CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj: C:/code/lite_db/Orm/sql_parser.cpp
+CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj: CMakeFiles/server_app.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj"
+	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj -MF CMakeFiles\server_app.dir\Orm\sql_parser.cpp.obj.d -o CMakeFiles\server_app.dir\Orm\sql_parser.cpp.obj -c C:\code\lite_db\Orm\sql_parser.cpp
+
+CMakeFiles/server_app.dir/Orm/sql_parser.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/server_app.dir/Orm/sql_parser.cpp.i"
+	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E C:\code\lite_db\Orm\sql_parser.cpp > CMakeFiles\server_app.dir\Orm\sql_parser.cpp.i
+
+CMakeFiles/server_app.dir/Orm/sql_parser.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/server_app.dir/Orm/sql_parser.cpp.s"
+	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S C:\code\lite_db\Orm\sql_parser.cpp -o CMakeFiles\server_app.dir\Orm\sql_parser.cpp.s
+
 CMakeFiles/server_app.dir/database/database.cpp.obj: CMakeFiles/server_app.dir/flags.make
 CMakeFiles/server_app.dir/database/database.cpp.obj: CMakeFiles/server_app.dir/includes_CXX.rsp
 CMakeFiles/server_app.dir/database/database.cpp.obj: C:/code/lite_db/database/database.cpp
 CMakeFiles/server_app.dir/database/database.cpp.obj: CMakeFiles/server_app.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/server_app.dir/database/database.cpp.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/server_app.dir/database/database.cpp.obj"
 	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/server_app.dir/database/database.cpp.obj -MF CMakeFiles\server_app.dir\database\database.cpp.obj.d -o CMakeFiles\server_app.dir\database\database.cpp.obj -c C:\code\lite_db\database\database.cpp
 
 CMakeFiles/server_app.dir/database/database.cpp.i: cmake_force
@@ -90,7 +105,7 @@ CMakeFiles/server_app.dir/main.cpp.obj: CMakeFiles/server_app.dir/flags.make
 CMakeFiles/server_app.dir/main.cpp.obj: CMakeFiles/server_app.dir/includes_CXX.rsp
 CMakeFiles/server_app.dir/main.cpp.obj: C:/code/lite_db/main.cpp
 CMakeFiles/server_app.dir/main.cpp.obj: CMakeFiles/server_app.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/server_app.dir/main.cpp.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/server_app.dir/main.cpp.obj"
 	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/server_app.dir/main.cpp.obj -MF CMakeFiles\server_app.dir\main.cpp.obj.d -o CMakeFiles\server_app.dir\main.cpp.obj -c C:\code\lite_db\main.cpp
 
 CMakeFiles/server_app.dir/main.cpp.i: cmake_force
@@ -105,7 +120,7 @@ CMakeFiles/server_app.dir/server/tcp_server.cpp.obj: CMakeFiles/server_app.dir/f
 CMakeFiles/server_app.dir/server/tcp_server.cpp.obj: CMakeFiles/server_app.dir/includes_CXX.rsp
 CMakeFiles/server_app.dir/server/tcp_server.cpp.obj: C:/code/lite_db/server/tcp_server.cpp
 CMakeFiles/server_app.dir/server/tcp_server.cpp.obj: CMakeFiles/server_app.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/server_app.dir/server/tcp_server.cpp.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/server_app.dir/server/tcp_server.cpp.obj"
 	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/server_app.dir/server/tcp_server.cpp.obj -MF CMakeFiles\server_app.dir\server\tcp_server.cpp.obj.d -o CMakeFiles\server_app.dir\server\tcp_server.cpp.obj -c C:\code\lite_db\server\tcp_server.cpp
 
 CMakeFiles/server_app.dir/server/tcp_server.cpp.i: cmake_force
@@ -120,7 +135,7 @@ CMakeFiles/server_app.dir/storage/storage.cpp.obj: CMakeFiles/server_app.dir/fla
 CMakeFiles/server_app.dir/storage/storage.cpp.obj: CMakeFiles/server_app.dir/includes_CXX.rsp
 CMakeFiles/server_app.dir/storage/storage.cpp.obj: C:/code/lite_db/storage/storage.cpp
 CMakeFiles/server_app.dir/storage/storage.cpp.obj: CMakeFiles/server_app.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/server_app.dir/storage/storage.cpp.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/server_app.dir/storage/storage.cpp.obj"
 	C:\msys64\ucrt64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/server_app.dir/storage/storage.cpp.obj -MF CMakeFiles\server_app.dir\storage\storage.cpp.obj.d -o CMakeFiles\server_app.dir\storage\storage.cpp.obj -c C:\code\lite_db\storage\storage.cpp
 
 CMakeFiles/server_app.dir/storage/storage.cpp.i: cmake_force
@@ -133,6 +148,7 @@ CMakeFiles/server_app.dir/storage/storage.cpp.s: cmake_force
 
 # Object files for target server_app
 server_app_OBJECTS = \
+"CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj" \
 "CMakeFiles/server_app.dir/database/database.cpp.obj" \
 "CMakeFiles/server_app.dir/main.cpp.obj" \
 "CMakeFiles/server_app.dir/server/tcp_server.cpp.obj" \
@@ -141,6 +157,7 @@ server_app_OBJECTS = \
 # External object files for target server_app
 server_app_EXTERNAL_OBJECTS =
 
+server_app.exe: CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj
 server_app.exe: CMakeFiles/server_app.dir/database/database.cpp.obj
 server_app.exe: CMakeFiles/server_app.dir/main.cpp.obj
 server_app.exe: CMakeFiles/server_app.dir/server/tcp_server.cpp.obj
@@ -150,7 +167,7 @@ server_app.exe: C:/code/lite_db/external/lib/liblz4_static.lib
 server_app.exe: CMakeFiles/server_app.dir/linkLibs.rsp
 server_app.exe: CMakeFiles/server_app.dir/objects1.rsp
 server_app.exe: CMakeFiles/server_app.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Linking CXX executable server_app.exe"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=C:\code\lite_db\build\CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Linking CXX executable server_app.exe"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles\server_app.dir\link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.

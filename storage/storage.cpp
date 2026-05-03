@@ -294,7 +294,11 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
         return "ERR_KEY_NOT_FOUND";
     };
 
+    // 1. ИЩЕМ В WRITE_BUFFER (Ждем до конца, берем самое свежее)
+    bool found_in_buffer = false;
+    std::string latest_buffer_result = "ERR_NOT_FOUND";
     size_t buf_off = 0;
+    
     while (buf_off < t->write_buffer.size()) {
         uint32_t rec_sz;
         memcpy(&rec_sz, t->write_buffer.data() + buf_off, sizeof(uint32_t));
@@ -302,12 +306,22 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
         memcpy(&rid, t->write_buffer.data() + buf_off + sizeof(uint32_t), sizeof(int));
         
         if (rid == id) {
-            if (rec_sz == sizeof(int)) return "ERR_NOT_FOUND"; // Проверка на Надгробие
-            return extract(t->write_buffer.data() + buf_off + sizeof(uint32_t) + sizeof(int));
+            found_in_buffer = true;
+            if (rec_sz == sizeof(int)) {
+                latest_buffer_result = "ERR_NOT_FOUND"; // Нашли надгробие!
+            } else {
+                latest_buffer_result = extract(t->write_buffer.data() + buf_off + sizeof(uint32_t) + sizeof(int));
+            }
+            // НЕ ДЕЛАЕМ return. Продолжаем искать более свежие версии!
         }
         buf_off += sizeof(uint32_t) + rec_sz;
     }
 
+    if (found_in_buffer) {
+        return latest_buffer_result;
+    }
+
+    // 2. ИЩЕМ НА ДИСКЕ В ИНДЕКСЕ
     if (t->index.find(id) == t->index.end()) return "ERR_NOT_FOUND";
     FileLocation loc = t->index[id];
 
@@ -322,7 +336,11 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
     std::vector<char> orig(header.original_size);
     LZ4_decompress_safe(comp.data(), orig.data(), header.compressed_size, header.original_size);
 
+    // 3. ИЩЕМ В РАСПАКОВАННОМ БЛОКЕ (Тоже ждем до конца)
+    bool found_in_block = false;
+    std::string latest_block_result = "ERR_NOT_FOUND";
     size_t offset = 0;
+    
     while (offset < orig.size()) {
         uint32_t rec_sz;
         memcpy(&rec_sz, orig.data() + offset, sizeof(uint32_t));
@@ -330,14 +348,22 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
         memcpy(&rid, orig.data() + offset + sizeof(uint32_t), sizeof(int));
 
         if (rid == id) {
-            if (rec_sz == sizeof(int)) return "ERR_NOT_FOUND"; // Проверка на Надгробие
-            return extract(orig.data() + offset + sizeof(uint32_t) + sizeof(int));
+            found_in_block = true;
+            if (rec_sz == sizeof(int)) {
+                latest_block_result = "ERR_NOT_FOUND"; // Нашли надгробие в блоке!
+            } else {
+                latest_block_result = extract(orig.data() + offset + sizeof(uint32_t) + sizeof(int));
+            }
         }
         offset += sizeof(uint32_t) + rec_sz;
     }
+    
+    if (found_in_block) {
+        return latest_block_result;
+    }
+
     return "ERR_NOT_FOUND";
 }
-
 std::string Storage::select_all(const std::string& table_name) {
     Table* t = nullptr;
     {

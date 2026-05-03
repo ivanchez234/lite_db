@@ -33,6 +33,7 @@ int main() {
         std::cout << "> ";
         std::getline(std::cin, cmd);
         if (cmd == "exit") break;
+        cmd += "\n";
 
         send(sock, cmd.c_str(), (int)cmd.size(), 0);
         

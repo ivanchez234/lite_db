@@ -1,4 +1,6 @@
 file(REMOVE_RECURSE
+  "CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj"
+  "CMakeFiles/server_app.dir/Orm/sql_parser.cpp.obj.d"
   "CMakeFiles/server_app.dir/database/database.cpp.obj"
   "CMakeFiles/server_app.dir/database/database.cpp.obj.d"
   "CMakeFiles/server_app.dir/main.cpp.obj"

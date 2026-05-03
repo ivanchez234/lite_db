@@ -17,6 +17,7 @@ include_directories(
 file(GLOB_RECURSE SERVER_SOURCES 
     "main.cpp"
     "database/*.cpp" 
+    "Orm/sql_parser.cpp"
     "storage/*.cpp" 
     "server/*.cpp"
 )
