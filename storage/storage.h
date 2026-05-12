@@ -7,6 +7,7 @@
 #include <fstream>
 #include <filesystem>
 #include <lz4.h>
+#include <zlib.h>
 
 namespace fs = std::filesystem;
 

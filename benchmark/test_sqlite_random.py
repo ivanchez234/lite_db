@@ -5,7 +5,7 @@ import os
 import base64
 
 DB_NAME = "test_sqlite_random10gb.db"
-TOTAL_RECORDS = 3500000*10
+TOTAL_RECORDS = 3500000
 BATCH_SIZE = 50000
 
 ASM_SNIPPETS = [b'\x55\x48\x89\xe5', b'\x48\x83\xec\x20', b'\xbf\x01\x00\x00\x00', b'\xe8\x00\x00\x00\x00']

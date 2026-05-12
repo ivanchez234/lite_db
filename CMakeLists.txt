@@ -33,10 +33,7 @@ endif()
 # --- СБОРКА СЕРВЕРА ---
 add_executable(server_app ${SERVER_SOURCES})
 
-# Линкуем библиотеки
-# Примечание: Если ты в UCRT64, убедись, что lz4_static совместим с GCC. 
-# Обычно для MinGW/UCRT используются файлы .a, но .lib тоже может сработать.
-target_link_libraries(server_app "${CMAKE_CURRENT_SOURCE_DIR}/external/lib/liblz4_static.lib" ws2_32)
+target_link_libraries(server_app "${CMAKE_CURRENT_SOURCE_DIR}/external/lib/liblz4_static.lib" ws2_32 z) 
 
 # --- СБОРКА КЛИЕНТА ---
 add_executable(client_app client.cpp)

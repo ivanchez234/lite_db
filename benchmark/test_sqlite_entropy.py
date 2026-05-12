@@ -5,7 +5,7 @@ import os
 import base64
 
 DB_NAME = "test_sqlite_entropy10gb.db"
-TOTAL_RECORDS = 1750000*10
+TOTAL_RECORDS = 1750000
 BATCH_SIZE = 50000  # SQLite отлично переваривает большие пачки
 
 def get_stealth_binary_data(record_id):

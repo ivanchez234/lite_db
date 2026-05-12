@@ -38,7 +38,7 @@ class LiteDBCursor:
     def execute(self, query, parameters=None):
         # --- ДОБАВЬ ЭТУ СТРОКУ (убираем переносы строк от SQLAlchemy) ---
         query = query.replace('\n', ' ').replace('\r', ' ')
-        # 1. МАГИЯ ПОДСТАНОВКИ: Заменяем '?' на реальные значения
+        # Заменяем '?' на реальные значения
         if parameters:
             for param in parameters:
                 if isinstance(param, str):
@@ -65,9 +65,6 @@ class LiteDBCursor:
 
         if raw_response.startswith("{"):
             data = json.loads(raw_response)
-            # SQLAlchemy очень капризна к порядку полей. 
-            # Если в запросе было "SELECT id, name...", она ждет (id, name...)
-            # Для простоты вернем значения в алфавитном порядке ключей или как они в JSON
             self.description = [(k, None, None, None, None, None, None) for k in data.keys()]
             self._results = [tuple(data.values())]
             self.rowcount = 1

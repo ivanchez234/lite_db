@@ -7,7 +7,7 @@ import json
 
 HOST = '127.0.0.1'
 PORT = 5555
-TOTAL_RECORDS = 3500000*10
+TOTAL_RECORDS = 3500000
 BATCH_SIZE = 1000
 
 # Набор реальных ассемблерных "запчастей"

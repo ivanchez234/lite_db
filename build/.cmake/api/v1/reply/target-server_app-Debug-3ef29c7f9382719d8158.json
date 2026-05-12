@@ -36,7 +36,7 @@
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 39,
+				"line" : 36,
 				"parent" : 0
 			},
 			{
@@ -132,6 +132,11 @@
 			{
 				"backtrace" : 2,
 				"fragment" : "-lws2_32",
+				"role" : "libraries"
+			},
+			{
+				"backtrace" : 2,
+				"fragment" : "-lz",
 				"role" : "libraries"
 			},
 			{

@@ -31,9 +31,6 @@ class LiteDBDialect(DefaultDialect):
 registry.register("litedb", "main_orm", "LiteDBDialect")
 
 
-# ==========================================
-# КОД ДЛЯ ПРЕПОДАВАТЕЛЯ (Использование ORM)
-# ==========================================
 
 # Подключаемся к нашему C++ серверу через кастомный протокол!
 engine = create_engine('litedb://127.0.0.1:5555')

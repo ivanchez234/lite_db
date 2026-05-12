@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <fstream>
 #include <cstring> // Для memcpy
+#include <zlib.h>
 
 Storage::Storage() {
     if (!fs::exists(root_path)) {
@@ -60,26 +61,43 @@ void Storage::flush_block_to_disk(Table* t) {
     // 1. УМНАЯ ПРОВЕРКА ЛИМИТА ДО ОТКРЫТИЯ ФАЙЛА
     std::string path = t->path + "seg_" + std::to_string(t->current_seg_id) + ".db";
     
-    // Если текущий файл уже существует и его размер перевалил за MAX_SEG_SIZE (300 байт)
+    // Если текущий файл уже существует и его размер перевалил за MAX_SEG_SIZE
     if (fs::exists(path) && fs::file_size(path) >= MAX_SEG_SIZE) {
         t->current_seg_id++; // Увеличиваем номер сегмента
         path = t->path + "seg_" + std::to_string(t->current_seg_id) + ".db"; // Обновляем путь!
     }
 
-    // 2. ОТКРЫВАЕМ ФАЙЛ (теперь мы точно знаем, что пишем в правильный)
+    // 2. ОТКРЫВАЕМ ФАЙЛ
     std::ofstream file(path, std::ios::binary | std::ios::app);
     file.seekp(0, std::ios::end);
     std::streampos block_start = file.tellp(); // Запоминаем позицию для индекса
 
-    // 3. СЖАТИЕ И ЗАПИСЬ
-    std::vector<char> compressed = compress_block(t->write_buffer);
+    // ==========================================
+    // 3. СЖАТИЕ ЧЕРЕЗ ZLIB (DEFLATE)
+    // ==========================================
+    uLongf original_size = t->write_buffer.size();
+    uLongf max_compressed_size = compressBound(original_size); // Узнаем макс. возможный размер
+    std::vector<char> compressed(max_compressed_size);
+
+    int res = compress(
+        (Bytef*)compressed.data(), 
+        &max_compressed_size, // После выполнения тут будет РЕАЛЬНЫЙ размер сжатых данных
+        (const Bytef*)t->write_buffer.data(), 
+        original_size
+    );
+
+    if (res != Z_OK) {
+        // Ошибка сжатия (в идеале нужно залогировать)
+        file.close();
+        return; 
+    }
 
     CompressedBlockHeader header;
-    header.original_size = t->write_buffer.size();
-    header.compressed_size = compressed.size();
+    header.original_size = original_size;
+    header.compressed_size = max_compressed_size; // Пишем реальный размер
 
     file.write(reinterpret_cast<char*>(&header), sizeof(header));
-    file.write(compressed.data(), compressed.size());
+    file.write(compressed.data(), max_compressed_size); // Пишем ровно столько, сколько сжалось
 
     // 4. ОБНОВЛЕНИЕ ИНДЕКСА
     size_t offset = 0;
@@ -93,7 +111,7 @@ void Storage::flush_block_to_disk(Table* t) {
             t->index.erase(id); // Удаляем из индекса, если надгробие
         } else {
             // Пишем актуальный путь (path) и смещение
-            t->index[id] = { path, block_start };
+            t->index[id] = { path, static_cast<size_t>(block_start) };
         }
         offset += sizeof(uint32_t) + rec_sz;
     }
@@ -334,7 +352,21 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
     in.read(comp.data(), header.compressed_size);
 
     std::vector<char> orig(header.original_size);
-    LZ4_decompress_safe(comp.data(), orig.data(), header.compressed_size, header.original_size);
+    
+    // ==========================================
+    // РАСПАКОВКА ЧЕРЕЗ ZLIB (DEFLATE)
+    // ==========================================
+    uLongf dest_len = header.original_size;
+    int uncomp_res = uncompress(
+        (Bytef*)orig.data(), 
+        &dest_len, 
+        (const Bytef*)comp.data(), 
+        header.compressed_size
+    );
+
+    if (uncomp_res != Z_OK) {
+        return "ERR_ZLIB_DECOMPRESSION_FAILED";
+    }
 
     // 3. ИЩЕМ В РАСПАКОВАННОМ БЛОКЕ (Тоже ждем до конца)
     bool found_in_block = false;
@@ -523,3 +555,4 @@ void Storage::remove(const std::string& table_name, int id) {
     tombstone.insert(tombstone.end(), reinterpret_cast<char*>(&id), reinterpret_cast<char*>(&id) + sizeof(int));
     insert_to_block(t, tombstone);
 }
+

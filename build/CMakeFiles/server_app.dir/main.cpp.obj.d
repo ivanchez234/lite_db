@@ -438,4 +438,6 @@ CMakeFiles/server_app.dir/main.cpp.obj: C:\code\lite_db\main.cpp \
  C:/msys64/ucrt64/include/c++/16.1.0/codecvt \
  C:/msys64/ucrt64/include/c++/16.1.0/bits/fs_dir.h \
  C:/msys64/ucrt64/include/c++/16.1.0/bits/fs_ops.h \
- C:/code/lite_db/external/include/lz4.h
+ C:/code/lite_db/external/include/lz4.h C:/msys64/ucrt64/include/zlib.h \
+ C:/msys64/ucrt64/include/zconf.h C:/msys64/ucrt64/include/unistd.h \
+ C:/msys64/ucrt64/include/io.h C:/msys64/ucrt64/include/getopt.h

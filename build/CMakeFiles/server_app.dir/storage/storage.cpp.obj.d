@@ -201,7 +201,15 @@ CMakeFiles/server_app.dir/storage/storage.cpp.obj: \
  C:/msys64/ucrt64/include/c++/16.1.0/bits/unique_ptr.h \
  C:/msys64/ucrt64/include/c++/16.1.0/bits/fs_dir.h \
  C:/msys64/ucrt64/include/c++/16.1.0/bits/fs_ops.h \
- C:/code/lite_db/external/include/lz4.h \
+ C:/code/lite_db/external/include/lz4.h C:/msys64/ucrt64/include/zlib.h \
+ C:/msys64/ucrt64/include/zconf.h \
+ C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/stdarg.h \
+ C:/msys64/ucrt64/include/stdarg.h \
+ C:/msys64/ucrt64/include/_mingw_stdarg.h \
+ C:/msys64/ucrt64/include/unistd.h C:/msys64/ucrt64/include/io.h \
+ C:/msys64/ucrt64/include/string.h \
+ C:/msys64/ucrt64/include/sec_api/string_s.h \
+ C:/msys64/ucrt64/include/getopt.h \
  C:/msys64/ucrt64/include/c++/16.1.0/iostream \
  C:/msys64/ucrt64/include/c++/16.1.0/algorithm \
  C:/msys64/ucrt64/include/c++/16.1.0/bits/stl_algo.h \
@@ -211,6 +219,4 @@ CMakeFiles/server_app.dir/storage/storage.cpp.obj: \
  C:/msys64/ucrt64/include/c++/16.1.0/bits/stl_tempbuf.h \
  C:/msys64/ucrt64/include/c++/16.1.0/pstl/glue_algorithm_defs.h \
  C:/msys64/ucrt64/include/c++/16.1.0/pstl/execution_defs.h \
- C:/msys64/ucrt64/include/c++/16.1.0/cstring \
- C:/msys64/ucrt64/include/string.h \
- C:/msys64/ucrt64/include/sec_api/string_s.h
+ C:/msys64/ucrt64/include/c++/16.1.0/cstring

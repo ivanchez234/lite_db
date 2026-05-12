@@ -7,7 +7,7 @@ import json
 
 HOST = '127.0.0.1'
 PORT = 5555
-TOTAL_RECORDS = 1750000*10
+TOTAL_RECORDS = 1750000
 BATCH_SIZE = 1000
 
 def get_stealth_binary_payload(record_id):
