@@ -75,6 +75,13 @@ private:
     // ДОБАВЬ ЭТУ СТРОКУ:
     void load_table_index(Table* t); 
 
+    // --- НОВЫЙ КОНВЕЙЕР ---
+    std::vector<char> pack_bools(const std::vector<char>& bool_bytes);
+    std::vector<char> unpack_bools(const std::vector<char>& packed, size_t original_count);
+    
+    std::vector<char> pack_columns(Table* t);
+    std::vector<char> unpack_columns(const std::vector<char>& columnar_buffer, Table* t);
+
 public:
     Storage();
     ~Storage();

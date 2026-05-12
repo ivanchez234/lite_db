@@ -7,6 +7,8 @@
 #include <cstring> // Для memcpy
 #include <zlib.h>
 
+
+
 Storage::Storage() {
     if (!fs::exists(root_path)) {
         fs::create_directories(root_path);
@@ -45,6 +47,209 @@ std::vector<char> compress_block(const std::vector<char>& raw_data) {
     return compressed_buffer;
 }
 
+std::vector<char> Storage::pack_bools(const std::vector<char>& bool_bytes) {
+    std::vector<char> packed;
+    if (bool_bytes.empty()) return packed;
+
+    size_t packed_size = (bool_bytes.size() + 7) / 8; // Округляем вверх
+    packed.assign(packed_size, 0);
+
+    for (size_t i = 0; i < bool_bytes.size(); ++i) {
+        if (bool_bytes[i]) { // Если true (не 0)
+            packed[i / 8] |= (1 << (i % 8)); // Устанавливаем конкретный бит
+        }
+    }
+    return packed;
+}
+
+std::vector<char> Storage::unpack_bools(const std::vector<char>& packed, size_t original_count) {
+    std::vector<char> bool_bytes(original_count, 0);
+    for (size_t i = 0; i < original_count; ++i) {
+        if (packed[i / 8] & (1 << (i % 8))) {
+            bool_bytes[i] = 1;
+        }
+    }
+    return bool_bytes;
+}
+
+std::vector<char> Storage::pack_columns(Table* t) {
+    const auto& row_buffer = t->write_buffer;
+    if (row_buffer.empty()) return {};
+
+    std::vector<uint32_t> sizes;
+    std::vector<int> ids;
+    std::vector<char> payloads; // Сюда мы будем складывать "остатки" данных
+    std::vector<char> bool_column; // Наша новая колонка для BOOL!
+
+    // 1. Ищем, есть ли в схеме колонка типа BOOL
+    bool has_bool = false;
+    uint32_t bool_hash = 0;
+    for (const auto& col : t->schema) {
+        if (col.type == DataType::BOOL) {
+            has_bool = true;
+            bool_hash = hash_string(col.name);
+            break; // Пока поддерживаем один BOOL для простоты
+        }
+    }
+
+    size_t offset = 0;
+    while (offset < row_buffer.size()) {
+        uint32_t rec_sz;
+        memcpy(&rec_sz, row_buffer.data() + offset, sizeof(uint32_t));
+        sizes.push_back(rec_sz);
+        offset += sizeof(uint32_t);
+
+        int id;
+        memcpy(&id, row_buffer.data() + offset, sizeof(int));
+        ids.push_back(id);
+        
+        if (rec_sz > sizeof(int)) {
+            size_t payload_size = rec_sz - sizeof(int);
+            char* payload_ptr = (char*)(row_buffer.data() + offset + sizeof(int));
+            
+            // --- ПАРСИНГ PAYLOAD ПО СХЕМЕ ---
+            if (has_bool) {
+                BinaryHeader head;
+                memcpy(&head, payload_ptr, sizeof(BinaryHeader));
+                size_t keys_offset = sizeof(BinaryHeader);
+                char bool_val = 0; // По умолчанию false
+
+                for (uint32_t i = 0; i < head.keys_count; ++i) {
+                    KeyRecord r;
+                    memcpy(&r, payload_ptr + keys_offset + (i * sizeof(KeyRecord)), sizeof(KeyRecord));
+                    if (r.key_hash == bool_hash) {
+                        size_t val_offset = keys_offset + (head.keys_count * sizeof(KeyRecord)) + r.data_offset;
+                        // Извлекаем значение BOOL (в виде строки "1" или "0", или байта)
+                        // Зависит от того, как pack_json его пишет. Предположим, там "1" или "true"
+                        if (r.data_size > 0 && payload_ptr[val_offset] != '0') {
+                            bool_val = 1;
+                        }
+                        break;
+                    }
+                }
+                bool_column.push_back(bool_val);
+            }
+            // ---------------------------------
+
+            // Сохраняем сырой payload (в идеале его тоже нужно разбить на колонки)
+            payloads.insert(payloads.end(), payload_ptr, payload_ptr + payload_size);
+            offset += sizeof(int) + payload_size;
+        } else {
+            offset += sizeof(int); // Надгробие
+            if (has_bool) bool_column.push_back(0); // Заглушка для удаленной записи
+        }
+    }
+
+    // --- ЛОГИЧЕСКОЕ СЖАТИЕ ---
+    
+    // 1. Delta-кодирование для ID
+    std::vector<int> delta_ids;
+    if (!ids.empty()) {
+        delta_ids.reserve(ids.size());
+        delta_ids.push_back(ids[0]);
+        for (size_t i = 1; i < ids.size(); ++i) {
+            delta_ids.push_back(ids[i] - ids[i - 1]);
+        }
+    }
+
+    // 2. Битовая упаковка для BOOL (Сжатие 8х!)
+    std::vector<char> packed_bools;
+    if (has_bool) {
+        packed_bools = pack_bools(bool_column);
+    }
+
+    // --- СКЛЕЙКА В ФИНАЛЬНЫЙ БЛОК ---
+    std::vector<char> columnar_buffer;
+    uint32_t count = sizes.size();
+    
+    columnar_buffer.insert(columnar_buffer.end(), (char*)&count, (char*)&count + sizeof(uint32_t));
+    columnar_buffer.insert(columnar_buffer.end(), (char*)sizes.data(), (char*)(sizes.data() + sizes.size()));
+    columnar_buffer.insert(columnar_buffer.end(), (char*)delta_ids.data(), (char*)(delta_ids.data() + delta_ids.size()));
+    
+    // Пишем информацию о BOOL колонке
+    char bool_flag = has_bool ? 1 : 0;
+    columnar_buffer.insert(columnar_buffer.end(), &bool_flag, &bool_flag + 1);
+    if (has_bool) {
+        uint32_t packed_bool_size = packed_bools.size();
+        columnar_buffer.insert(columnar_buffer.end(), (char*)&packed_bool_size, (char*)&packed_bool_size + sizeof(uint32_t));
+        columnar_buffer.insert(columnar_buffer.end(), packed_bools.begin(), packed_bools.end());
+    }
+
+    columnar_buffer.insert(columnar_buffer.end(), payloads.begin(), payloads.end());
+
+    return columnar_buffer;
+}
+
+std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buffer, Table* t) {
+    if (columnar_buffer.empty()) return {};
+
+    std::vector<char> row_buffer;
+    
+    uint32_t count;
+    size_t col_offset = 0;
+    memcpy(&count, columnar_buffer.data() + col_offset, sizeof(uint32_t));
+    col_offset += sizeof(uint32_t);
+
+    const uint32_t* sizes_ptr = reinterpret_cast<const uint32_t*>(columnar_buffer.data() + col_offset);
+    col_offset += count * sizeof(uint32_t);
+
+    const int* delta_ids_ptr = reinterpret_cast<const int*>(columnar_buffer.data() + col_offset);
+    col_offset += count * sizeof(int);
+
+    // ==========================================
+    // 1. ВОССТАНОВЛЕНИЕ ID ИЗ ДЕЛЬТ
+    // ==========================================
+    std::vector<int> restored_ids(count);
+    if (count > 0) {
+        restored_ids[0] = delta_ids_ptr[0];
+        for (uint32_t i = 1; i < count; ++i) {
+            restored_ids[i] = restored_ids[i - 1] + delta_ids_ptr[i]; 
+        }
+    }
+
+    // ==========================================
+    // 2. РАСПАКОВКА BOOL-КОЛОНКИ
+    // ==========================================
+    char bool_flag = columnar_buffer[col_offset];
+    col_offset += 1;
+    
+    std::vector<char> unpacked_bools;
+    if (bool_flag == 1) {
+        uint32_t packed_bool_size;
+        memcpy(&packed_bool_size, columnar_buffer.data() + col_offset, sizeof(uint32_t));
+        col_offset += sizeof(uint32_t);
+        
+        std::vector<char> packed_bools(columnar_buffer.data() + col_offset, columnar_buffer.data() + col_offset + packed_bool_size);
+        col_offset += packed_bool_size;
+        
+        // Разжимаем 1 байт обратно в 8 отдельных bool-значений
+        unpacked_bools = unpack_bools(packed_bools, count);
+    }
+
+    // 3. Чтение оставшихся данных (payloads)
+    const char* payloads_ptr = columnar_buffer.data() + col_offset;
+    size_t payload_offset = 0;
+
+    // ==========================================
+    // 4. СБОРКА СТРОК (Row-based format)
+    // ==========================================
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t rec_sz = sizes_ptr[i];
+        int id = restored_ids[i];
+
+        row_buffer.insert(row_buffer.end(), (char*)&rec_sz, (char*)&rec_sz + sizeof(uint32_t));
+        row_buffer.insert(row_buffer.end(), (char*)&id, (char*)&id + sizeof(int));
+
+        if (rec_sz > sizeof(int)) {
+            size_t payload_size = rec_sz - sizeof(int);
+            row_buffer.insert(row_buffer.end(), payloads_ptr + payload_offset, payloads_ptr + payload_offset + payload_size);
+            payload_offset += payload_size;
+        }
+    }
+
+    return row_buffer;
+}
+
 void Storage::insert_to_block(Table* t, const std::vector<char>& raw_record) {
     uint32_t rec_sz = static_cast<uint32_t>(raw_record.size());
     t->write_buffer.insert(t->write_buffer.end(), reinterpret_cast<char*>(&rec_sz), reinterpret_cast<char*>(&rec_sz) + sizeof(rec_sz));
@@ -73,16 +278,19 @@ void Storage::flush_block_to_disk(Table* t) {
     std::streampos block_start = file.tellp(); // Запоминаем позицию для индекса
 
     // ==========================================
-    // 3. СЖАТИЕ ЧЕРЕЗ ZLIB (DEFLATE)
+    // НОВЫЙ ШАГ: КОЛОНОЧНАЯ ПЕРЕПАКОВКА
     // ==========================================
-    uLongf original_size = t->write_buffer.size();
-    uLongf max_compressed_size = compressBound(original_size); // Узнаем макс. возможный размер
+    std::vector<char> columnar_data = pack_columns(t);
+
+    // 3. СЖАТИЕ ЧЕРЕЗ ZLIB (DEFLATE)
+    uLongf original_size = columnar_data.size();
+    uLongf max_compressed_size = compressBound(original_size);
     std::vector<char> compressed(max_compressed_size);
 
     int res = compress(
         (Bytef*)compressed.data(), 
-        &max_compressed_size, // После выполнения тут будет РЕАЛЬНЫЙ размер сжатых данных
-        (const Bytef*)t->write_buffer.data(), 
+        &max_compressed_size, 
+        (const Bytef*)columnar_data.data(), // ЖМЕМ УЖЕ КОЛОНКИ!
         original_size
     );
 
@@ -313,6 +521,7 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
     };
 
     // 1. ИЩЕМ В WRITE_BUFFER (Ждем до конца, берем самое свежее)
+    // В буфере данные лежат в обычном строковом (Row-based) виде, поэтому читаем напрямую!
     bool found_in_buffer = false;
     std::string latest_buffer_result = "ERR_NOT_FOUND";
     size_t buf_off = 0;
@@ -368,23 +577,29 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
         return "ERR_ZLIB_DECOMPRESSION_FAILED";
     }
 
-    // 3. ИЩЕМ В РАСПАКОВАННОМ БЛОКЕ (Тоже ждем до конца)
+    // ==========================================
+    // МАГИЯ: РАСПАКОВКА КОЛОНОК ОБРАТНО В СТРОКИ
+    // ==========================================
+    // Массив orig сейчас хранит колонки. Превращаем их обратно в удобные строки.
+    std::vector<char> row_orig = unpack_columns(orig, t);
+
+    // 3. ИЩЕМ В РАСПАКОВАННОМ БЛОКЕ (Используем row_orig вместо orig)
     bool found_in_block = false;
     std::string latest_block_result = "ERR_NOT_FOUND";
     size_t offset = 0;
     
-    while (offset < orig.size()) {
+    while (offset < row_orig.size()) {
         uint32_t rec_sz;
-        memcpy(&rec_sz, orig.data() + offset, sizeof(uint32_t));
+        memcpy(&rec_sz, row_orig.data() + offset, sizeof(uint32_t));
         int rid;
-        memcpy(&rid, orig.data() + offset + sizeof(uint32_t), sizeof(int));
+        memcpy(&rid, row_orig.data() + offset + sizeof(uint32_t), sizeof(int));
 
         if (rid == id) {
             found_in_block = true;
             if (rec_sz == sizeof(int)) {
                 latest_block_result = "ERR_NOT_FOUND"; // Нашли надгробие в блоке!
             } else {
-                latest_block_result = extract(orig.data() + offset + sizeof(uint32_t) + sizeof(int));
+                latest_block_result = extract(row_orig.data() + offset + sizeof(uint32_t) + sizeof(int));
             }
         }
         offset += sizeof(uint32_t) + rec_sz;

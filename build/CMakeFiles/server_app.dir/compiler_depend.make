@@ -220,6 +220,7 @@ CMakeFiles/server_app.dir/database/database.cpp.obj: C:/code/lite_db/database/da
   C:/msys64/ucrt64/include/_mingw_off_t.h \
   C:/msys64/ucrt64/include/_mingw_secapi.h \
   C:/msys64/ucrt64/include/_mingw_stat64.h \
+  C:/msys64/ucrt64/include/_mingw_stdarg.h \
   C:/msys64/ucrt64/include/_timeval.h \
   C:/msys64/ucrt64/include/c++/16.1.0/algorithm \
   C:/msys64/ucrt64/include/c++/16.1.0/backward/binders.h \
@@ -419,6 +420,8 @@ CMakeFiles/server_app.dir/database/database.cpp.obj: C:/code/lite_db/database/da
   C:/msys64/ucrt64/include/crtdefs.h \
   C:/msys64/ucrt64/include/ctype.h \
   C:/msys64/ucrt64/include/errno.h \
+  C:/msys64/ucrt64/include/getopt.h \
+  C:/msys64/ucrt64/include/io.h \
   C:/msys64/ucrt64/include/limits.h \
   C:/msys64/ucrt64/include/locale.h \
   C:/msys64/ucrt64/include/malloc.h \
@@ -431,23 +434,30 @@ CMakeFiles/server_app.dir/database/database.cpp.obj: C:/code/lite_db/database/da
   C:/msys64/ucrt64/include/sched.h \
   C:/msys64/ucrt64/include/sec_api/stdio_s.h \
   C:/msys64/ucrt64/include/sec_api/stdlib_s.h \
+  C:/msys64/ucrt64/include/sec_api/string_s.h \
   C:/msys64/ucrt64/include/sec_api/sys/timeb_s.h \
   C:/msys64/ucrt64/include/sec_api/wchar_s.h \
   C:/msys64/ucrt64/include/sec_api/wconio_s.h \
   C:/msys64/ucrt64/include/signal.h \
+  C:/msys64/ucrt64/include/stdarg.h \
   C:/msys64/ucrt64/include/stddef.h \
   C:/msys64/ucrt64/include/stdint.h \
   C:/msys64/ucrt64/include/stdio.h \
   C:/msys64/ucrt64/include/stdlib.h \
+  C:/msys64/ucrt64/include/string.h \
   C:/msys64/ucrt64/include/swprintf.inl \
   C:/msys64/ucrt64/include/sys/timeb.h \
   C:/msys64/ucrt64/include/sys/types.h \
   C:/msys64/ucrt64/include/time.h \
+  C:/msys64/ucrt64/include/unistd.h \
   C:/msys64/ucrt64/include/vadefs.h \
   C:/msys64/ucrt64/include/wchar.h \
   C:/msys64/ucrt64/include/wctype.h \
+  C:/msys64/ucrt64/include/zconf.h \
+  C:/msys64/ucrt64/include/zlib.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/limits.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/mm_malloc.h \
+  C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/stdarg.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/stddef.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/stdint.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/syslimits.h \
@@ -674,6 +684,7 @@ CMakeFiles/server_app.dir/main.cpp.obj: C:/code/lite_db/main.cpp \
   C:/msys64/ucrt64/include/fibersapi.h \
   C:/msys64/ucrt64/include/fileapi.h \
   C:/msys64/ucrt64/include/fltwinerror.h \
+  C:/msys64/ucrt64/include/getopt.h \
   C:/msys64/ucrt64/include/guiddef.h \
   C:/msys64/ucrt64/include/handleapi.h \
   C:/msys64/ucrt64/include/heapapi.h \
@@ -681,6 +692,7 @@ CMakeFiles/server_app.dir/main.cpp.obj: C:/code/lite_db/main.cpp \
   C:/msys64/ucrt64/include/in6addr.h \
   C:/msys64/ucrt64/include/inaddr.h \
   C:/msys64/ucrt64/include/interlockedapi.h \
+  C:/msys64/ucrt64/include/io.h \
   C:/msys64/ucrt64/include/ioapiset.h \
   C:/msys64/ucrt64/include/jobapi.h \
   C:/msys64/ucrt64/include/joystickapi.h \
@@ -787,6 +799,7 @@ CMakeFiles/server_app.dir/main.cpp.obj: C:/code/lite_db/main.cpp \
   C:/msys64/ucrt64/include/timeapi.h \
   C:/msys64/ucrt64/include/timezoneapi.h \
   C:/msys64/ucrt64/include/tvout.h \
+  C:/msys64/ucrt64/include/unistd.h \
   C:/msys64/ucrt64/include/unknwn.h \
   C:/msys64/ucrt64/include/unknwnbase.h \
   C:/msys64/ucrt64/include/urlmon.h \
@@ -826,6 +839,8 @@ CMakeFiles/server_app.dir/main.cpp.obj: C:/code/lite_db/main.cpp \
   C:/msys64/ucrt64/include/ws2tcpip.h \
   C:/msys64/ucrt64/include/wtypes.h \
   C:/msys64/ucrt64/include/wtypesbase.h \
+  C:/msys64/ucrt64/include/zconf.h \
+  C:/msys64/ucrt64/include/zlib.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/adxintrin.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/ammintrin.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/amxavx512intrin.h \
@@ -1168,6 +1183,7 @@ CMakeFiles/server_app.dir/server/tcp_server.cpp.obj: C:/code/lite_db/server/tcp_
   C:/msys64/ucrt64/include/fibersapi.h \
   C:/msys64/ucrt64/include/fileapi.h \
   C:/msys64/ucrt64/include/fltwinerror.h \
+  C:/msys64/ucrt64/include/getopt.h \
   C:/msys64/ucrt64/include/guiddef.h \
   C:/msys64/ucrt64/include/handleapi.h \
   C:/msys64/ucrt64/include/heapapi.h \
@@ -1175,6 +1191,7 @@ CMakeFiles/server_app.dir/server/tcp_server.cpp.obj: C:/code/lite_db/server/tcp_
   C:/msys64/ucrt64/include/in6addr.h \
   C:/msys64/ucrt64/include/inaddr.h \
   C:/msys64/ucrt64/include/interlockedapi.h \
+  C:/msys64/ucrt64/include/io.h \
   C:/msys64/ucrt64/include/ioapiset.h \
   C:/msys64/ucrt64/include/jobapi.h \
   C:/msys64/ucrt64/include/joystickapi.h \
@@ -1281,6 +1298,7 @@ CMakeFiles/server_app.dir/server/tcp_server.cpp.obj: C:/code/lite_db/server/tcp_
   C:/msys64/ucrt64/include/timeapi.h \
   C:/msys64/ucrt64/include/timezoneapi.h \
   C:/msys64/ucrt64/include/tvout.h \
+  C:/msys64/ucrt64/include/unistd.h \
   C:/msys64/ucrt64/include/unknwn.h \
   C:/msys64/ucrt64/include/unknwnbase.h \
   C:/msys64/ucrt64/include/urlmon.h \
@@ -1320,6 +1338,8 @@ CMakeFiles/server_app.dir/server/tcp_server.cpp.obj: C:/code/lite_db/server/tcp_
   C:/msys64/ucrt64/include/ws2tcpip.h \
   C:/msys64/ucrt64/include/wtypes.h \
   C:/msys64/ucrt64/include/wtypesbase.h \
+  C:/msys64/ucrt64/include/zconf.h \
+  C:/msys64/ucrt64/include/zlib.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/adxintrin.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/ammintrin.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/amxavx512intrin.h \
@@ -1448,6 +1468,7 @@ CMakeFiles/server_app.dir/storage/storage.cpp.obj: C:/code/lite_db/storage/stora
   C:/msys64/ucrt64/include/_mingw_off_t.h \
   C:/msys64/ucrt64/include/_mingw_secapi.h \
   C:/msys64/ucrt64/include/_mingw_stat64.h \
+  C:/msys64/ucrt64/include/_mingw_stdarg.h \
   C:/msys64/ucrt64/include/_timeval.h \
   C:/msys64/ucrt64/include/c++/16.1.0/algorithm \
   C:/msys64/ucrt64/include/c++/16.1.0/backward/binders.h \
@@ -1628,6 +1649,8 @@ CMakeFiles/server_app.dir/storage/storage.cpp.obj: C:/code/lite_db/storage/stora
   C:/msys64/ucrt64/include/crtdefs.h \
   C:/msys64/ucrt64/include/ctype.h \
   C:/msys64/ucrt64/include/errno.h \
+  C:/msys64/ucrt64/include/getopt.h \
+  C:/msys64/ucrt64/include/io.h \
   C:/msys64/ucrt64/include/limits.h \
   C:/msys64/ucrt64/include/locale.h \
   C:/msys64/ucrt64/include/malloc.h \
@@ -1645,6 +1668,7 @@ CMakeFiles/server_app.dir/storage/storage.cpp.obj: C:/code/lite_db/storage/stora
   C:/msys64/ucrt64/include/sec_api/wchar_s.h \
   C:/msys64/ucrt64/include/sec_api/wconio_s.h \
   C:/msys64/ucrt64/include/signal.h \
+  C:/msys64/ucrt64/include/stdarg.h \
   C:/msys64/ucrt64/include/stddef.h \
   C:/msys64/ucrt64/include/stdint.h \
   C:/msys64/ucrt64/include/stdio.h \
@@ -1654,11 +1678,15 @@ CMakeFiles/server_app.dir/storage/storage.cpp.obj: C:/code/lite_db/storage/stora
   C:/msys64/ucrt64/include/sys/timeb.h \
   C:/msys64/ucrt64/include/sys/types.h \
   C:/msys64/ucrt64/include/time.h \
+  C:/msys64/ucrt64/include/unistd.h \
   C:/msys64/ucrt64/include/vadefs.h \
   C:/msys64/ucrt64/include/wchar.h \
   C:/msys64/ucrt64/include/wctype.h \
+  C:/msys64/ucrt64/include/zconf.h \
+  C:/msys64/ucrt64/include/zlib.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/limits.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/mm_malloc.h \
+  C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/stdarg.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/stddef.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/stdint.h \
   C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/syslimits.h \
@@ -1685,9 +1713,9 @@ C:/msys64/ucrt64/include/_mingw.h:
 
 C:/msys64/ucrt64/include/imm.h:
 
-C:/msys64/ucrt64/include/concurrencysal.h:
-
 C:/msys64/ucrt64/include/string.h:
+
+C:/msys64/ucrt64/include/concurrencysal.h:
 
 C:/msys64/ucrt64/include/c++/16.1.0/bits/functexcept.h:
 
@@ -1706,8 +1734,6 @@ C:/msys64/ucrt64/include/_mingw_stat64.h:
 C:/msys64/ucrt64/include/c++/16.1.0/concepts:
 
 C:/msys64/ucrt64/include/c++/16.1.0/algorithm:
-
-C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/waitpkgintrin.h:
 
 C:/msys64/ucrt64/include/c++/16.1.0/backward/binders.h:
 
@@ -1813,11 +1839,11 @@ C:/msys64/ucrt64/include/c++/16.1.0/bits/regex_automaton.h:
 
 C:/msys64/ucrt64/include/c++/16.1.0/x86_64-w64-mingw32/bits/atomic_word.h:
 
+C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/x86gprintrin.h:
+
 C:/msys64/ucrt64/include/c++/16.1.0/bits/new_except.h:
 
 C:/msys64/ucrt64/include/errno.h:
-
-C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/x86gprintrin.h:
 
 C:/msys64/ucrt64/include/c++/16.1.0/bits/exception_defines.h:
 
@@ -1951,9 +1977,9 @@ C:/msys64/ucrt64/include/c++/16.1.0/bits/sstream.tcc:
 
 C:/msys64/ucrt64/include/c++/16.1.0/codecvt:
 
-C:/msys64/ucrt64/include/libloaderapi.h:
-
 C:/msys64/ucrt64/include/sec_api/string_s.h:
+
+C:/msys64/ucrt64/include/libloaderapi.h:
 
 C:/msys64/ucrt64/include/c++/16.1.0/bits/std_abs.h:
 
@@ -2058,6 +2084,8 @@ C:/msys64/ucrt64/include/c++/16.1.0/bits/uniform_int_dist.h:
 C:/msys64/ucrt64/include/c++/16.1.0/bits/fs_dir.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/gfniintrin.h:
+
+C:/msys64/ucrt64/include/getopt.h:
 
 C:/msys64/ucrt64/include/c++/16.1.0/bits/unique_ptr.h:
 
@@ -2339,7 +2367,19 @@ C:/msys64/ucrt64/include/c++/16.1.0/x86_64-w64-mingw32/bits/basic_file.h:
 
 C:/msys64/ucrt64/include/c++/16.1.0/x86_64-w64-mingw32/bits/c++io.h:
 
+C:/msys64/ucrt64/include/io.h:
+
+C:/msys64/ucrt64/include/stdarg.h:
+
 C:/msys64/ucrt64/include/stdint.h:
+
+C:/msys64/ucrt64/include/unistd.h:
+
+C:/msys64/ucrt64/include/zconf.h:
+
+C:/msys64/ucrt64/include/zlib.h:
+
+C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/stdarg.h:
 
 C:/code/lite_db/main.cpp:
 
@@ -2351,13 +2391,13 @@ C:/msys64/ucrt64/include/_bsd_types.h:
 
 C:/msys64/ucrt64/include/_mingw_unicode.h:
 
+C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/wmmintrin.h:
+
 C:/msys64/ucrt64/include/apiset.h:
 
 C:/msys64/ucrt64/include/consoleapi3.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/vaesintrin.h:
-
-C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/wmmintrin.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/avx512vlintrin.h:
 
@@ -2525,8 +2565,6 @@ C:/msys64/ucrt64/include/servprov.h:
 
 C:/msys64/ucrt64/include/specstrings.h:
 
-C:/msys64/ucrt64/include/stdarg.h:
-
 C:/msys64/ucrt64/include/stralign.h:
 
 C:/msys64/ucrt64/include/stringapiset.h:
@@ -2581,9 +2619,9 @@ C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/ammintrin.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/amxbf16intrin.h:
 
-C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/amxfp8intrin.h:
-
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/x86intrin.h:
+
+C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/amxfp8intrin.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/avx10_2satcvtintrin.h:
 
@@ -2649,8 +2687,6 @@ C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/clwbintrin.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/sha512intrin.h:
 
-C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/wbnoinvdintrin.h:
-
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/emmintrin.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/enqcmdintrin.h:
@@ -2689,8 +2725,6 @@ C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/sm3intrin.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/sm4intrin.h:
 
-C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/stdarg.h:
-
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/tbmintrin.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/tsxldtrkintrin.h:
@@ -2698,6 +2732,10 @@ C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/tsxldtrkintrin.h:
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/usermsrintrin.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/vpclmulqdqintrin.h:
+
+C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/waitpkgintrin.h:
+
+C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/wbnoinvdintrin.h:
 
 C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/xmmintrin.h:
 
