@@ -6,7 +6,6 @@
 #include <mutex>
 #include <fstream>
 #include <filesystem>
-#include <lz4.h>
 #include <zlib.h>
 
 namespace fs = std::filesystem;
@@ -72,8 +71,10 @@ private:
     void load_schema(Table* t);
     bool validate_types(Table* t, const std::map<std::string, std::string>& data);
     
-    // ДОБАВЬ ЭТУ СТРОКУ:
-    void load_table_index(Table* t); 
+    void load_table_index(Table* t);
+
+    // Единственная точка распаковки блока: zlib -> колонки -> строки.
+    bool read_block(std::ifstream& in, Table* t, std::vector<char>& row_out);
 
     // --- НОВЫЙ КОНВЕЙЕР ---
     std::vector<char> pack_bools(const std::vector<char>& bool_bytes);

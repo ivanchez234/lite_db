@@ -34,19 +34,6 @@ uint32_t Storage::hash_string(const std::string& s) {
     return hash;
 }
 
-std::vector<char> compress_block(const std::vector<char>& raw_data) {
-    int max_compressed_size = LZ4_compressBound(raw_data.size());
-    std::vector<char> compressed_buffer(max_compressed_size);
-
-    int actual_size = LZ4_compress_default(
-        raw_data.data(), compressed_buffer.data(), 
-        raw_data.size(), max_compressed_size
-    );
-
-    compressed_buffer.resize(actual_size);
-    return compressed_buffer;
-}
-
 std::vector<char> Storage::pack_bools(const std::vector<char>& bool_bytes) {
     std::vector<char> packed;
     if (bool_bytes.empty()) return packed;
@@ -248,6 +235,33 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
     }
 
     return row_buffer;
+}
+
+// Читает один сжатый блок из текущей позиции потока и возвращает его
+// в строковом (row-based) виде: zlib -> колонки -> строки.
+// Единственное место, где блок распаковывается, поэтому кодек записи и
+// кодек чтения не могут разойтись.
+// Возвращает false, если блок не дочитался или не распаковался.
+bool Storage::read_block(std::ifstream& in, Table* t, std::vector<char>& row_out) {
+    CompressedBlockHeader header;
+    if (!in.read(reinterpret_cast<char*>(&header), sizeof(header))) return false;
+
+    std::vector<char> comp(header.compressed_size);
+    if (!in.read(comp.data(), header.compressed_size)) return false;
+
+    std::vector<char> columnar(header.original_size);
+    uLongf dest_len = header.original_size;
+    int res = uncompress(
+        reinterpret_cast<Bytef*>(columnar.data()),
+        &dest_len,
+        reinterpret_cast<const Bytef*>(comp.data()),
+        header.compressed_size
+    );
+
+    if (res != Z_OK || dest_len != header.original_size) return false;
+
+    row_out = unpack_columns(columnar, t);
+    return true;
 }
 
 void Storage::insert_to_block(Table* t, const std::vector<char>& raw_record) {
@@ -639,26 +653,20 @@ std::string Storage::select_all(const std::string& table_name) {
     while (fs::exists(t->path + "seg_" + std::to_string(sid) + ".db")) {
         std::ifstream in(t->path + "seg_" + std::to_string(sid) + ".db", std::ios::binary);
         while (in.peek() != EOF && in.good()) {
-            CompressedBlockHeader header;
-            if (!in.read((char*)&header, sizeof(header))) break;
-
-            std::vector<char> comp(header.compressed_size);
-            in.read(comp.data(), header.compressed_size);
-
-            std::vector<char> orig(header.original_size);
-            LZ4_decompress_safe(comp.data(), orig.data(), header.compressed_size, header.original_size);
+            std::vector<char> rows;
+            if (!read_block(in, t, rows)) break;
 
             size_t offset = 0;
-            while (offset < orig.size()) {
+            while (offset < rows.size()) {
                 uint32_t rec_sz;
-                memcpy(&rec_sz, orig.data() + offset, sizeof(uint32_t));
+                memcpy(&rec_sz, rows.data() + offset, sizeof(uint32_t));
                 int id;
-                memcpy(&id, orig.data() + offset + sizeof(uint32_t), sizeof(int));
+                memcpy(&id, rows.data() + offset + sizeof(uint32_t), sizeof(int));
                 
                 if (rec_sz == sizeof(int)) {
                     latest_data.erase(id);
                 } else {
-                    latest_data[id] = extract(orig.data() + offset + sizeof(uint32_t) + sizeof(int));
+                    latest_data[id] = extract(rows.data() + offset + sizeof(uint32_t) + sizeof(int));
                 }
                 offset += sizeof(uint32_t) + rec_sz;
             }
@@ -702,21 +710,16 @@ void Storage::load_table_index(Table* t) {
         
         while (in.peek() != EOF && in.good()) {
             std::streampos block_start = in.tellg();
-            CompressedBlockHeader header;
-            if (!in.read((char*)&header, sizeof(header))) break;
-            
-            std::vector<char> comp(header.compressed_size);
-            in.read(comp.data(), header.compressed_size);
-            
-            std::vector<char> orig(header.original_size);
-            LZ4_decompress_safe(comp.data(), orig.data(), header.compressed_size, header.original_size);
+
+            std::vector<char> rows;
+            if (!read_block(in, t, rows)) break;
             
             size_t offset = 0;
-            while (offset < orig.size()) {
+            while (offset < rows.size()) {
                 uint32_t rec_sz;
-                memcpy(&rec_sz, orig.data() + offset, sizeof(uint32_t));
+                memcpy(&rec_sz, rows.data() + offset, sizeof(uint32_t));
                 int id;
-                memcpy(&id, orig.data() + offset + sizeof(uint32_t), sizeof(int));
+                memcpy(&id, rows.data() + offset + sizeof(uint32_t), sizeof(int));
                 
                 if (rec_sz == sizeof(int)) {
                     t->index.erase(id);

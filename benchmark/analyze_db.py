@@ -53,7 +53,7 @@ for i, scale in enumerate(["1GB", "10GB"]):
     sqlite_mb = [kb_to_mb(data_kb[scale]["Random"]["SQLite"]), kb_to_mb(data_kb[scale]["Stealth"]["SQLite"])]
     
     # Отрисовка столбцов
-    rects1 = ax.bar(x - width/2, yadro_mb, width, label='YADRO DB (LZ4)', color=colors_yadro, edgecolor='black')
+    rects1 = ax.bar(x - width/2, yadro_mb, width, label='lite_db (zlib)', color=colors_yadro, edgecolor='black')
     rects2 = ax.bar(x + width/2, sqlite_mb, width, label='SQLite', color=colors_sqlite, edgecolor='black')
     
     ax.set_ylabel('Размер на диске (Мегабайты)')

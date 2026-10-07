@@ -7,7 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 1. Пути к заголовкам
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/include
     ${CMAKE_CURRENT_SOURCE_DIR}/database
     ${CMAKE_CURRENT_SOURCE_DIR}/storage
     ${CMAKE_CURRENT_SOURCE_DIR}/server
@@ -33,7 +32,7 @@ endif()
 # --- СБОРКА СЕРВЕРА ---
 add_executable(server_app ${SERVER_SOURCES})
 
-target_link_libraries(server_app "${CMAKE_CURRENT_SOURCE_DIR}/external/lib/liblz4_static.lib" ws2_32 z) 
+target_link_libraries(server_app ws2_32 z)
 
 # --- СБОРКА КЛИЕНТА ---
 add_executable(client_app client.cpp)
