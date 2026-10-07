@@ -1,0 +1,41 @@
+
+INSERT use 1 {"name": "Alex", "age": 30, "is_active": true}
+INSERT use 2 {"name": "Maria", "age": 22, "is_active": false}
+UPDATE use 1 {"name": "Alex", "age": 31, "is_active": true}
+SELECT use ALL
+
+
+INSERT products 101 {"title": "MacBook Pro", "price": 1999.99}
+INSERT products 102 {"title": "Wireless Mouse", "price": 49.50}
+SELECT products 101
+SELECT products 102
+
+
+
+INSERT prod 201 {"title": "Mechanical Keyboard", "price": 150.00, "sale": 119.99}
+INSERT prod 202 {"title": "Gaming Monitor", "price": 350.75, "sale": 299.90}
+UPDATE prod 201 {"title": "Mechanical Keyboard", "price": 150.00, "sale": 99.99}
+SELECT prod ALL
+
+
+
+INSERT events 301 {"title": "System Reboot", "event_date": "2024-03-15"}
+INSERT events 302 {"title": "Database Backup", "event_date": "2024-03-16"}
+DELETE events 301
+SELECT events ALL
+FLUSH
+
+INSERT INTO use (id, name, age, is_active) VALUES (10, 'Alice', 25, 1)
+
+INSERT INTO use (id, name, age, is_active) VALUES (11, 'Bob_Builder', 30, 0)
+
+INSERT INTO use (id, name, age, is_active) VALUES (12, 'Charlie', 19, 1)
+
+SELECT * FROM use WHERE id = 11
+SELECT * FROM use
+
+UPDATE use SET id = 10, name = 'Alice', age = 26, is_active = 1 WHERE id = 10
+SELECT * FROM use WHERE id = 10
+DELETE FROM use WHERE id = 12
+SELECT * FROM use WHERE id = 12
+FLUSH

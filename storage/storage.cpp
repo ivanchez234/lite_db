@@ -264,6 +264,60 @@ bool Storage::read_block(std::ifstream& in, Table* t, std::vector<char>& row_out
     return true;
 }
 
+// Достаёт значение одного поля, не разбирая запись целиком: ищет хеш имени
+// в таблице ключей и читает ровно нужные байты по смещению.
+bool Storage::extract_field(const char* data_ptr, const std::string& key, std::string& out) {
+    BinaryHeader head;
+    memcpy(&head, data_ptr, sizeof(BinaryHeader));
+
+    const uint32_t h = hash_string(key);
+    const size_t keys_offset = sizeof(BinaryHeader);
+    const size_t body_offset = keys_offset + head.keys_count * sizeof(KeyRecord);
+
+    for (uint32_t i = 0; i < head.keys_count; ++i) {
+        KeyRecord r;
+        memcpy(&r, data_ptr + keys_offset + i * sizeof(KeyRecord), sizeof(KeyRecord));
+        if (r.key_hash == h) {
+            out.assign(data_ptr + body_offset + r.data_offset, r.data_size);
+            return true;
+        }
+    }
+    return false;
+}
+
+// Собирает JSON записи из значений полей по схеме таблицы.
+// Раньше для этого в каждой записи лежала копия исходного JSON под ключом
+// __full__, то есть все значения хранились на диске дважды.
+// Пустая строка означает, что у таблицы нет схемы: без неё имена полей
+// восстановить нельзя, в записи лежат только их хеши.
+std::string Storage::rebuild_json(const char* data_ptr, Table* t) {
+    if (t->schema.empty()) return "";
+
+    std::string out = "{";
+    bool first = true;
+
+    for (const auto& col : t->schema) {
+        std::string val;
+        if (!extract_field(data_ptr, col.name, val)) continue;
+
+        if (!first) out += ",";
+        first = false;
+
+        out += "\"" + col.name + "\":";
+
+        if (col.type == DataType::STRING || col.type == DataType::DATE) {
+            out += "\"" + val + "\"";
+        } else if (col.type == DataType::BOOL) {
+            out += (val == "true" || val == "1") ? "true" : "false";
+        } else {
+            out += val;
+        }
+    }
+
+    out += "}";
+    return out;
+}
+
 void Storage::insert_to_block(Table* t, const std::vector<char>& raw_record) {
     uint32_t rec_sz = static_cast<uint32_t>(raw_record.size());
     t->write_buffer.insert(t->write_buffer.end(), reinterpret_cast<char*>(&rec_sz), reinterpret_cast<char*>(&rec_sz) + sizeof(rec_sz));
@@ -405,8 +459,6 @@ std::vector<char> Storage::pack_json(const std::string& json_str, Table* t) {
     auto data = parse_json_manual(json_str);
     if (!validate_types(t, data)) throw std::runtime_error("ERR_CONSTRAINT_VIOLATION");
 
-    data["__full__"] = json_str; 
-
     BinaryHeader head;
     head.keys_count = (uint32_t)data.size();
     
@@ -518,20 +570,13 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
     std::lock_guard<std::mutex> t_lock(t->mtx);
     
     auto extract = [&](char* data_ptr) -> std::string {
-        BinaryHeader head;
-        memcpy(&head, data_ptr, sizeof(BinaryHeader));
-        std::string to_find = target_key.empty() ? "__full__" : target_key;
-        uint32_t h = hash_string(to_find);
-        size_t keys_offset = sizeof(BinaryHeader);
-        for (uint32_t i = 0; i < head.keys_count; ++i) {
-            KeyRecord r;
-            memcpy(&r, data_ptr + keys_offset + (i * sizeof(KeyRecord)), sizeof(KeyRecord));
-            if (r.key_hash == h) {
-                size_t val_offset = keys_offset + (head.keys_count * sizeof(KeyRecord)) + r.data_offset;
-                return std::string(data_ptr + val_offset, r.data_size);
-            }
+        if (!target_key.empty()) {
+            std::string val;
+            if (!extract_field(data_ptr, target_key, val)) return "ERR_KEY_NOT_FOUND";
+            return val;
         }
-        return "ERR_KEY_NOT_FOUND";
+        std::string json = rebuild_json(data_ptr, t);
+        return json.empty() ? "ERR_NO_SCHEMA" : json;
     };
 
     // 1. ИЩЕМ В WRITE_BUFFER (Ждем до конца, берем самое свежее)
@@ -637,16 +682,8 @@ std::string Storage::select_all(const std::string& table_name) {
     std::map<int, std::string> latest_data;
 
     auto extract = [&](char* data_ptr) -> std::string {
-        BinaryHeader head;
-        memcpy(&head, data_ptr, sizeof(BinaryHeader));
-        uint32_t h = hash_string("__full__");
-        size_t keys_offset = sizeof(BinaryHeader);
-        for (uint32_t i = 0; i < head.keys_count; ++i) {
-            KeyRecord r;
-            memcpy(&r, data_ptr + keys_offset + (i * sizeof(KeyRecord)), sizeof(KeyRecord));
-            if (r.key_hash == h) return std::string(data_ptr + keys_offset + (head.keys_count * sizeof(KeyRecord)) + r.data_offset, r.data_size);
-        }
-        return "{}";
+        std::string json = rebuild_json(data_ptr, t);
+        return json.empty() ? "{}" : json;
     };
 
     int sid = 0;

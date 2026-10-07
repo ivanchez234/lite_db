@@ -76,6 +76,12 @@ private:
     // Единственная точка распаковки блока: zlib -> колонки -> строки.
     bool read_block(std::ifstream& in, Table* t, std::vector<char>& row_out);
 
+    // Чтение одного поля записи по имени, без разбора записи целиком.
+    bool extract_field(const char* data_ptr, const std::string& key, std::string& out);
+
+    // Сборка JSON записи из значений полей по схеме таблицы.
+    std::string rebuild_json(const char* data_ptr, Table* t);
+
     // --- НОВЫЙ КОНВЕЙЕР ---
     std::vector<char> pack_bools(const std::vector<char>& bool_bytes);
     std::vector<char> unpack_bools(const std::vector<char>& packed, size_t original_count);
