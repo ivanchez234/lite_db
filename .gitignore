@@ -1,0 +1,74 @@
+# ---------- Build output ----------
+build/
+Build/
+build-*/
+out/
+cmake-build-*/
+
+# ---------- CMake ----------
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+CMakeUserPresets.json
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+_deps/
+
+# ---------- Object files ----------
+*.o
+*.obj
+*.lo
+*.slo
+
+# ---------- Precompiled headers ----------
+*.gch
+*.pch
+
+# ---------- Libraries ----------
+*.lib
+*.a
+*.la
+*.lai
+*.so
+*.so.*
+*.dylib
+*.dll
+*.dll.a
+
+# ---------- Executables ----------
+*.exe
+*.out
+*.app
+
+# ---------- Debug info ----------
+*.pdb
+*.ilk
+*.idb
+*.su
+*.dSYM/
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ---------- Editors and OS ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---------- lite_db runtime data ----------
+data/
+*.db
+wal.log

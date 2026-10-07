@@ -1,0 +1,11 @@
+# LF in the repository, native line endings in the working tree.
+# Keeps diffs clean regardless of each developer's core.autocrlf setting.
+* text=auto
+
+# Files that must never be line-ending converted
+*.png binary
+*.lib binary
+*.a   binary
+*.dll binary
+*.exe binary
+*.obj binary
