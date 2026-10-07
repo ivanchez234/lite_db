@@ -59,6 +59,95 @@ std::vector<char> Storage::unpack_bools(const std::vector<char>& packed, size_t 
     return bool_bytes;
 }
 
+// Вырезает из записи поле с заданным хешем: убирает его KeyRecord, его байты из
+// тела и сдвигает смещения полей, лежавших после него. Значение уходит в value.
+// Если поля нет, запись возвращается без изменений, found остаётся false.
+std::vector<char> Storage::strip_field(const char* payload, size_t payload_size,
+                                       uint32_t field_hash, std::string& value, bool& found) {
+    found = false;
+
+    BinaryHeader head;
+    memcpy(&head, payload, sizeof(BinaryHeader));
+
+    const size_t keys_offset = sizeof(BinaryHeader);
+    const size_t body_offset = keys_offset + head.keys_count * sizeof(KeyRecord);
+    const size_t body_size = payload_size - body_offset;
+
+    std::vector<KeyRecord> kept;
+    kept.reserve(head.keys_count);
+
+    uint32_t removed_offset = 0;
+    uint32_t removed_size = 0;
+
+    for (uint32_t i = 0; i < head.keys_count; ++i) {
+        KeyRecord r;
+        memcpy(&r, payload + keys_offset + i * sizeof(KeyRecord), sizeof(KeyRecord));
+
+        if (!found && r.key_hash == field_hash) {
+            found = true;
+            removed_offset = r.data_offset;
+            removed_size = r.data_size;
+            value.assign(payload + body_offset + r.data_offset, r.data_size);
+            continue;
+        }
+        kept.push_back(r);
+    }
+
+    if (!found) return std::vector<char>(payload, payload + payload_size);
+
+    for (auto& r : kept) {
+        if (r.data_offset > removed_offset) r.data_offset -= removed_size;
+    }
+
+    BinaryHeader new_head = head;
+    new_head.keys_count = static_cast<uint32_t>(kept.size());
+    new_head.total_size = static_cast<uint32_t>(sizeof(BinaryHeader)
+                        + kept.size() * sizeof(KeyRecord)
+                        + (body_size - removed_size));
+
+    std::vector<char> out;
+    out.reserve(new_head.total_size);
+    out.insert(out.end(), (char*)&new_head, (char*)&new_head + sizeof(BinaryHeader));
+    for (const auto& r : kept) out.insert(out.end(), (char*)&r, (char*)&r + sizeof(KeyRecord));
+
+    out.insert(out.end(), payload + body_offset, payload + body_offset + removed_offset);
+    out.insert(out.end(), payload + body_offset + removed_offset + removed_size,
+                          payload + body_offset + body_size);
+    return out;
+}
+
+// Обратная операция: дописывает значение в конец тела и добавляет его KeyRecord.
+// Порядок полей в записи при этом меняется, но поиск идёт по хешу, а не по позиции.
+std::vector<char> Storage::insert_field(const char* payload, size_t payload_size,
+                                        uint32_t field_hash, const std::string& value) {
+    BinaryHeader head;
+    memcpy(&head, payload, sizeof(BinaryHeader));
+
+    const size_t keys_offset = sizeof(BinaryHeader);
+    const size_t body_offset = keys_offset + head.keys_count * sizeof(KeyRecord);
+    const size_t body_size = payload_size - body_offset;
+
+    BinaryHeader new_head = head;
+    new_head.keys_count = head.keys_count + 1;
+    new_head.total_size = static_cast<uint32_t>(sizeof(BinaryHeader)
+                        + new_head.keys_count * sizeof(KeyRecord)
+                        + body_size + value.size());
+
+    KeyRecord added;
+    added.key_hash = field_hash;
+    added.data_offset = static_cast<uint32_t>(body_size);
+    added.data_size = static_cast<uint32_t>(value.size());
+
+    std::vector<char> out;
+    out.reserve(new_head.total_size);
+    out.insert(out.end(), (char*)&new_head, (char*)&new_head + sizeof(BinaryHeader));
+    out.insert(out.end(), payload + keys_offset, payload + body_offset);
+    out.insert(out.end(), (char*)&added, (char*)&added + sizeof(KeyRecord));
+    out.insert(out.end(), payload + body_offset, payload + body_offset + body_size);
+    out.insert(out.end(), value.begin(), value.end());
+    return out;
+}
+
 std::vector<char> Storage::pack_columns(Table* t) {
     const auto& row_buffer = t->write_buffer;
     if (row_buffer.empty()) return {};
@@ -83,7 +172,6 @@ std::vector<char> Storage::pack_columns(Table* t) {
     while (offset < row_buffer.size()) {
         uint32_t rec_sz;
         memcpy(&rec_sz, row_buffer.data() + offset, sizeof(uint32_t));
-        sizes.push_back(rec_sz);
         offset += sizeof(uint32_t);
 
         int id;
@@ -92,36 +180,29 @@ std::vector<char> Storage::pack_columns(Table* t) {
         
         if (rec_sz > sizeof(int)) {
             size_t payload_size = rec_sz - sizeof(int);
-            char* payload_ptr = (char*)(row_buffer.data() + offset + sizeof(int));
-            
-            // --- ПАРСИНГ PAYLOAD ПО СХЕМЕ ---
+            const char* payload_ptr = row_buffer.data() + offset + sizeof(int);
+
             if (has_bool) {
-                BinaryHeader head;
-                memcpy(&head, payload_ptr, sizeof(BinaryHeader));
-                size_t keys_offset = sizeof(BinaryHeader);
-                char bool_val = 0; // По умолчанию false
+                // Значение уходит в битовую колонку и вырезается из самой записи,
+                // иначе оно лежало бы в блоке дважды.
+                std::string value;
+                bool found = false;
+                std::vector<char> stripped = strip_field(payload_ptr, payload_size,
+                                                         bool_hash, value, found);
 
-                for (uint32_t i = 0; i < head.keys_count; ++i) {
-                    KeyRecord r;
-                    memcpy(&r, payload_ptr + keys_offset + (i * sizeof(KeyRecord)), sizeof(KeyRecord));
-                    if (r.key_hash == bool_hash) {
-                        size_t val_offset = keys_offset + (head.keys_count * sizeof(KeyRecord)) + r.data_offset;
-                        // Извлекаем значение BOOL (в виде строки "1" или "0", или байта)
-                        // Зависит от того, как pack_json его пишет. Предположим, там "1" или "true"
-                        if (r.data_size > 0 && payload_ptr[val_offset] != '0') {
-                            bool_val = 1;
-                        }
-                        break;
-                    }
-                }
-                bool_column.push_back(bool_val);
+                bool_column.push_back(
+                    (found && value != "0" && value != "false") ? 1 : 0);
+
+                sizes.push_back(static_cast<uint32_t>(sizeof(int) + stripped.size()));
+                payloads.insert(payloads.end(), stripped.begin(), stripped.end());
+            } else {
+                sizes.push_back(rec_sz);
+                payloads.insert(payloads.end(), payload_ptr, payload_ptr + payload_size);
             }
-            // ---------------------------------
 
-            // Сохраняем сырой payload (в идеале его тоже нужно разбить на колонки)
-            payloads.insert(payloads.end(), payload_ptr, payload_ptr + payload_size);
             offset += sizeof(int) + payload_size;
         } else {
+            sizes.push_back(rec_sz);
             offset += sizeof(int); // Надгробие
             if (has_bool) bool_column.push_back(0); // Заглушка для удаленной записи
         }
@@ -217,20 +298,46 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
     const char* payloads_ptr = columnar_buffer.data() + col_offset;
     size_t payload_offset = 0;
 
+    // Хеш bool-колонки берём из схемы: в блоке он не хранится.
+    // Поэтому переименование bool-колонки делает старые блоки нечитаемыми —
+    // эволюция схемы не поддерживается.
+    uint32_t bool_hash = 0;
+    for (const auto& col : t->schema) {
+        if (col.type == DataType::BOOL) {
+            bool_hash = hash_string(col.name);
+            break;
+        }
+    }
+
     // ==========================================
     // 4. СБОРКА СТРОК (Row-based format)
     // ==========================================
     for (uint32_t i = 0; i < count; ++i) {
-        uint32_t rec_sz = sizes_ptr[i];
+        uint32_t stored_sz = sizes_ptr[i];
         int id = restored_ids[i];
 
-        row_buffer.insert(row_buffer.end(), (char*)&rec_sz, (char*)&rec_sz + sizeof(uint32_t));
-        row_buffer.insert(row_buffer.end(), (char*)&id, (char*)&id + sizeof(int));
+        if (stored_sz > sizeof(int)) {
+            size_t payload_size = stored_sz - sizeof(int);
+            const char* payload_ptr = payloads_ptr + payload_offset;
 
-        if (rec_sz > sizeof(int)) {
-            size_t payload_size = rec_sz - sizeof(int);
-            row_buffer.insert(row_buffer.end(), payloads_ptr + payload_offset, payloads_ptr + payload_offset + payload_size);
+            std::vector<char> restored;
+            if (bool_flag == 1 && bool_hash != 0 && i < unpacked_bools.size()) {
+                // Возвращаем в запись значение, вырезанное при упаковке.
+                std::string value = unpacked_bools[i] ? "true" : "false";
+                restored = insert_field(payload_ptr, payload_size, bool_hash, value);
+            } else {
+                restored.assign(payload_ptr, payload_ptr + payload_size);
+            }
+
+            uint32_t rec_sz = static_cast<uint32_t>(sizeof(int) + restored.size());
+            row_buffer.insert(row_buffer.end(), (char*)&rec_sz, (char*)&rec_sz + sizeof(uint32_t));
+            row_buffer.insert(row_buffer.end(), (char*)&id, (char*)&id + sizeof(int));
+            row_buffer.insert(row_buffer.end(), restored.begin(), restored.end());
+
             payload_offset += payload_size;
+        } else {
+            row_buffer.insert(row_buffer.end(), (char*)&stored_sz, (char*)&stored_sz + sizeof(uint32_t));
+            row_buffer.insert(row_buffer.end(), (char*)&id, (char*)&id + sizeof(int));
         }
     }
 

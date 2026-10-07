@@ -82,6 +82,14 @@ private:
     // Сборка JSON записи из значений полей по схеме таблицы.
     std::string rebuild_json(const char* data_ptr, Table* t);
 
+    // Вырезает поле из записи и возвращает его значение через value.
+    std::vector<char> strip_field(const char* payload, size_t payload_size,
+                                  uint32_t field_hash, std::string& value, bool& found);
+
+    // Возвращает вырезанное поле обратно в запись.
+    std::vector<char> insert_field(const char* payload, size_t payload_size,
+                                   uint32_t field_hash, const std::string& value);
+
     // --- НОВЫЙ КОНВЕЙЕР ---
     std::vector<char> pack_bools(const std::vector<char>& bool_bytes);
     std::vector<char> unpack_bools(const std::vector<char>& packed, size_t original_count);
