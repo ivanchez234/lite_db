@@ -30,6 +30,10 @@ using Fields = std::vector<Field>;
 // в error, что именно не так.
 bool parse_object(std::string_view input, Fields& out, std::string& error);
 
+// Разбирает объект в начале input и сообщает, сколько символов он занял.
+// Нужен для команд с несколькими объектами подряд (MPUT).
+bool parse_object_prefix(std::string_view input, size_t& consumed, Fields& out, std::string& error);
+
 // Строка в виде JSON-литерала: в кавычках, с экранированием.
 std::string quote(std::string_view text);
 

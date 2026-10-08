@@ -126,6 +126,8 @@ class Connection:
             self._sock = socket.create_connection((host, port), timeout=timeout)
         except OSError as exc:
             raise OperationalError(f"не удалось подключиться к {host}:{port}: {exc}") from exc
+        # Без задержки Нейгла: короткие команды уходят сразу (см. README, «Производительность»).
+        self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self._reader = self._sock.makefile("rb")
         self._closed = False
 

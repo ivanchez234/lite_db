@@ -18,7 +18,9 @@
 
 
 
-Storage::Storage() {
+Storage::Storage(std::string root) : root_path(std::move(root)) {
+    if (root_path.empty()) root_path = "data/";
+    if (root_path.back() != '/') root_path += '/';
     if (!fs::exists(root_path)) {
         fs::create_directories(root_path);
     }
@@ -435,6 +437,7 @@ bool Storage::read_block(std::ifstream& in, Table* t, std::vector<char>& row_out
 
     if (res != Z_OK || dest_len != header.original_size) return false;
 
+    stats_.blocks_read.add();
     row_out = unpack_columns(columnar, t);
     return true;
 }
@@ -514,7 +517,7 @@ void Storage::insert_to_block(Table* t, const std::vector<char>& raw_record) {
     t->write_buffer.insert(t->write_buffer.end(), reinterpret_cast<char*>(&rec_sz), reinterpret_cast<char*>(&rec_sz) + sizeof(rec_sz));
     t->write_buffer.insert(t->write_buffer.end(), raw_record.begin(), raw_record.end());
 
-    if (t->write_buffer.size() >= t->BLOCK_SIZE) {
+    if (t->write_buffer.size() >= block_size_.load(std::memory_order_relaxed)) {
         // Неудачный сброс не теряет данных: они остаются в буфере (и в журнале),
         // а следующая запись попробует сбросить их снова.
         if (!flush_block_to_disk(t)) {
@@ -597,6 +600,9 @@ bool Storage::flush_block_to_disk(Table* t) {
     }
 
     t->unsynced_segments.insert(path);
+    stats_.blocks_written.add();
+    stats_.block_bytes_raw.add(original_size);
+    stats_.block_bytes_compressed.add(sizeof(header) + compressed_size);
     t->write_buffer.clear(); 
     return true;
 }
@@ -795,6 +801,9 @@ bool Storage::set_schema(const std::string& table_name, const std::vector<Column
     std::unique_lock<std::shared_mutex> lock(t->mtx);
     t->schema = columns;
     save_schema(t); 
+    // Распаковка блока зависит от схемы (какая колонка — BOOL),
+    // поэтому закешированные блоки после смены схемы недействительны.
+    cache_.clear();
     return true;
 }
 
@@ -866,20 +875,77 @@ WriteResult Storage::insert(const std::string& table_name, int id, const std::st
         }
     }
 
+    fill_id_column(t, id, fields);
+
     // Сначала проверяем данные, потом пишем в журнал: мусор, который всё
     // равно будет отвергнут, не должен попадать в журнал.
     if (!validate_fields(t, fields)) return WriteResult::invalid_data;
-    const std::vector<char> bin = pack_fields(fields);
+    const std::vector<char> record = make_record(id, fields);
 
     // Журнал под замком таблицы: порядок записей в журнале совпадает
     // с порядком применения, и восстановление воспроизведёт ту же историю.
     if (log && !log()) return WriteResult::log_failed;
 
-    std::vector<char> full_record;
-    full_record.insert(full_record.end(), reinterpret_cast<char*>(&id), reinterpret_cast<char*>(&id) + sizeof(int));
-    full_record.insert(full_record.end(), bin.begin(), bin.end());
+    insert_to_block(t, record);
+    return WriteResult::ok;
+}
 
-    insert_to_block(t, full_record);
+void Storage::fill_id_column(Table* t, int id, FieldMap& fields) {
+    // SQL-транслятор не кладёт id внутрь записи, поэтому заполняем его сами:
+    // иначе таблица со схемой вида "id:INT name:STRING" отвергала бы каждую вставку.
+    for (const auto& col : t->schema) {
+        if (col.name == "id" && fields.count("id") == 0) {
+            fields.emplace("id", lite_db::json::Value{std::to_string(id), false});
+        }
+    }
+}
+
+std::vector<char> Storage::make_record(int id, const FieldMap& fields) {
+    const std::vector<char> bin = pack_fields(fields);
+    std::vector<char> record;
+    record.reserve(sizeof(int) + bin.size());
+    record.insert(record.end(), reinterpret_cast<const char*>(&id), reinterpret_cast<const char*>(&id) + sizeof(int));
+    record.insert(record.end(), bin.begin(), bin.end());
+    return record;
+}
+
+WriteResult Storage::insert_batch(const std::string& table_name, const BatchRows& rows,
+                                  bool skip_existing, const WriteLog& log) {
+    // Повтор id внутри одного пакета — ошибка клиента. Проверяем заранее:
+    // строки пакета попадают в буфер только в конце, и exists_locked их не видит.
+    {
+        std::unordered_map<int, bool> seen;
+        for (const auto& row : rows) {
+            if (!seen.emplace(row.first, true).second) return WriteResult::id_exists;
+        }
+    }
+
+    Table* t = lookup_table(table_name);
+    if (!t) return WriteResult::table_not_found;
+
+    std::unique_lock<std::shared_mutex> t_lock(t->mtx);
+
+    // Сначала проверяем ВСЕ строки и только потом что-то меняем: пакет
+    // применяется целиком или не применяется вовсе.
+    std::vector<std::vector<char>> records;
+    records.reserve(rows.size());
+    for (const auto& [id, parsed] : rows) {
+        if (exists_locked(t, id)) {
+            if (skip_existing) continue;
+            return WriteResult::id_exists;
+        }
+        FieldMap fields(parsed.begin(), parsed.end());
+        fill_id_column(t, id, fields);
+        if (!validate_fields(t, fields)) return WriteResult::invalid_data;
+        records.push_back(make_record(id, fields));
+    }
+
+    if (records.empty()) return WriteResult::ok;   // при восстановлении всё уже было на диске
+
+    // Весь пакет — одна запись журнала и, значит, один fsync.
+    if (log && !log()) return WriteResult::log_failed;
+
+    for (const auto& record : records) insert_to_block(t, record);
     return WriteResult::ok;
 }
 
@@ -908,15 +974,24 @@ Storage::Lookup Storage::find_latest_locked(Table* t, int id, std::vector<char>&
     const auto index_it = t->index.find(id);
     if (index_it == t->index.end()) return Lookup::missing;
 
-    std::ifstream in(index_it->second.filename, std::ios::binary);
-    if (!in) return Lookup::read_error;
-    in.seekg(index_it->second.offset);
+    const FileLocation& loc = index_it->second;
+    const auto offset = static_cast<int64_t>(static_cast<std::streamoff>(loc.offset));
 
-    // read_block проверяет размеры из заголовка до выделения памяти.
-    std::vector<char> rows;
-    if (!read_block(in, t, rows)) return Lookup::read_error;
+    // Сначала кеш: блок на диске неизменен, поэтому копия не устаревает.
+    BlockCache::Rows rows = cache_.get(loc.filename, offset);
+    if (!rows) {
+        std::ifstream in(loc.filename, std::ios::binary);
+        if (!in) return Lookup::read_error;
+        in.seekg(loc.offset);
 
-    return scan(rows.data(), rows.size(), seen) ? Lookup::found : Lookup::missing;
+        // read_block проверяет размеры из заголовка до выделения памяти.
+        auto fresh = std::make_shared<std::vector<char>>();
+        if (!read_block(in, t, *fresh)) return Lookup::read_error;
+        rows = std::move(fresh);
+        cache_.put(loc.filename, offset, rows);
+    }
+
+    return scan(rows->data(), rows->size(), seen) ? Lookup::found : Lookup::missing;
 }
 
 std::string Storage::select(const std::string& table_name, int id, const std::string& target_key) {

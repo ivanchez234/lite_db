@@ -7,9 +7,12 @@
 
 #include "database/wal.h"
 
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -154,5 +157,52 @@ TEST_CASE("запись работает во всех режимах", "[wal]")
         }
         Wal reopened(kPath, mode);
         REQUIRE(reopened.replay().size() == 1);
+    }
+}
+
+TEST_CASE("групповой коммит: параллельные записи все сохраняются, fsync меньше записей", "[wal][concurrency]") {
+    // Под ThreadSanitizer этот тест проверяет схему «лидер делает fsync
+    // без мьютекса, остальные дописывают и ждут».
+    remove_log();
+
+    constexpr int kThreads = 8;
+    constexpr int kPerThread = 100;
+    uint64_t appends = 0;
+    uint64_t fsyncs = 0;
+    {
+        Wal wal(kPath, Wal::Sync::full);
+        REQUIRE(wal.is_open());
+
+        std::atomic<int> failures{0};
+        std::vector<std::thread> threads;
+        for (int t = 0; t < kThreads; ++t) {
+            threads.emplace_back([&, t] {
+                for (int i = 0; i < kPerThread; ++i) {
+                    if (!wal.append("INSERT t " + std::to_string(t * 1000 + i) + " {}")) failures.fetch_add(1);
+                }
+            });
+        }
+        for (auto& th : threads) th.join();
+
+        REQUIRE(failures.load() == 0);
+        appends = wal.appends();
+        fsyncs = wal.fsyncs();
+    }
+
+    REQUIRE(appends == kThreads * kPerThread);
+    REQUIRE(fsyncs >= 1);
+    REQUIRE(fsyncs <= appends);   // обычно заметно меньше — fsync делится между записями
+
+    Wal reopened(kPath, Wal::Sync::flush);
+    const auto records = reopened.replay();
+    REQUIRE(records.size() == static_cast<size_t>(kThreads * kPerThread));
+
+    // Внутри каждого потока порядок сохранён.
+    std::vector<int> last(kThreads, -1);
+    for (const auto& r : records) {
+        const int id = std::stoi(r.substr(9, r.find(' ', 9) - 9));
+        const int t = id / 1000;
+        REQUIRE(id % 1000 > last[t]);
+        last[t] = id % 1000;
     }
 }

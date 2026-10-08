@@ -13,6 +13,10 @@
 #include <zlib.h>
 
 #include "json.h"
+#include "metrics.h"
+#include "block_cache.h"
+
+#include <atomic>
 
 namespace fs = std::filesystem;
 
@@ -61,9 +65,9 @@ struct Table {
     // Гарантий справедливости стандарт не даёт, поэтому поток читателей
     // теоретически может надолго отодвинуть писателя.
     std::shared_mutex mtx;
-    // Блочное сжатие
+    // Блочное сжатие: записи копятся здесь, пока не наберётся размер блока
+    // (Storage::block_size_), затем сжимаются и уходят на диск.
     std::vector<char> write_buffer;
-    const size_t BLOCK_SIZE = 4096; // 4 КБ — стандартный размер блока
 
     // Сегменты, в которые писали после последнего fsync. Блок, сброшенный
     // через ofstream, лежит в кеше ядра и потерю питания не переживёт.
@@ -89,17 +93,40 @@ enum class WriteMode {
     upsert    // запись целиком: новая или новая версия существующей
 };
 
+// Статистика хранилища для команды STATS.
+struct StorageStats {
+    lite_db::Counter blocks_written;          // блоков сброшено на диск
+    lite_db::Counter block_bytes_raw;         // их размер до сжатия (колоночная раскладка)
+    lite_db::Counter block_bytes_compressed;  // их размер на диске
+    lite_db::Counter blocks_read;             // блоков прочитано и распаковано
+};
+
 // Вызывается под замком таблицы после проверки данных, но до их применения.
 // Возвращает false, если операцию сохранить не удалось: тогда она отменяется.
 using WriteLog = std::function<bool()>;
 
 class Storage {
 private:
-    std::string root_path = "data/";
+    // Порядок полей подобран так, чтобы не было дыр выравнивания: шарды кеша
+    // выровнены по 64 байта (см. BlockCache), и поле с таким выравниванием
+    // в середине класса оставляло бы перед собой пустые байты.
+
+    // Распакованные блоки, прочитанные с диска. По умолчанию 32 МБ,
+    // настраивается block_cache_mb в setup.yaml.
+    BlockCache cache_{32u * 1024u * 1024u};
+
     // Потолок на размер блока. Размеры читаются из заголовка в файле, и
     // повреждённое значение не должно приводить к выделению гигабайтов.
     static constexpr uint32_t MAX_BLOCK_SIZE = 64u * 1024u * 1024u;
     const size_t MAX_SEG_SIZE = 10 * 1024 * 1024;
+
+    // Сколько байт записей копить в буфере таблицы перед сжатием в блок.
+    // Меняется только при чтении конфигурации, до начала работы сервера.
+    std::atomic<size_t> block_size_{4096};
+
+    std::string root_path;
+
+    StorageStats stats_;
 
     // Таблицей владеет карта. Удаления таблиц нет, поэтому указатель,
     // полученный из карты, остаётся валидным до разрушения Storage — и его
@@ -121,6 +148,11 @@ private:
     using FieldMap = std::map<std::string, lite_db::json::Value>;
 
     uint32_t hash_string(const std::string& s);
+    // Колонка "id" в схеме — тот же ключ записи: заполняет её, если не передана.
+    void fill_id_column(Table* t, int id, FieldMap& fields);
+    // id + упакованные поля — запись в формате буфера таблицы.
+    std::vector<char> make_record(int id, const FieldMap& fields);
+
     // Проверяет поля по схеме таблицы (типы, набор колонок) и приводит
     // BOOL к true/false. false — данные не соответствуют схеме.
     bool validate_fields(Table* t, FieldMap& fields);
@@ -171,7 +203,8 @@ private:
     bool sync_segments(Table* t);
 
 public:
-    Storage();
+    // root — каталог с данными (по умолчанию data/ в текущей папке).
+    explicit Storage(std::string root = "data/");
 
     bool create_table(const std::string& name);
     bool set_schema(const std::string& table_name, const std::vector<Column>& columns);
@@ -182,10 +215,28 @@ public:
                        WriteMode mode = WriteMode::upsert, const WriteLog& log = {});
     WriteResult remove(const std::string& table_name, int id, const WriteLog& log = {});
 
+    // Пакетная вставка (MPUT): все строки под одним замком таблицы, одной
+    // записью журнала и одним fsync. Атомарна: если хоть одна строка не
+    // проходит проверку или её id занят, не вставляется ничего.
+    // skip_existing — для восстановления из журнала: строки, которые уже
+    // попали на диск до аварии, пропускаются, а не отвергают весь пакет.
+    using BatchRows = std::vector<std::pair<int, lite_db::json::Fields>>;
+    WriteResult insert_batch(const std::string& table_name, const BatchRows& rows,
+                             bool skip_existing, const WriteLog& log = {});
+
     std::string select(const std::string& table_name, int id, const std::string& target_key = "");
     // Ответ в одну строку: протокол разделяет ответы переводом строки.
     std::string select_all(const std::string& table_name);
     bool exists(const std::string& table_name, int id);
+
+    const StorageStats& stats() const noexcept { return stats_; }
+    uint64_t cache_hits() const noexcept { return cache_.hits(); }
+    uint64_t cache_misses() const noexcept { return cache_.misses(); }
+
+    // Настройки из setup.yaml. Вызывать до того, как сервер начал работу.
+    void set_block_cache_bytes(size_t bytes) { cache_.set_capacity(bytes); }
+    void set_block_size(size_t bytes) { block_size_.store(bytes); }
+    size_t block_size() const noexcept { return block_size_.load(); }
 
     // Сбрасывает буферы всех таблиц и делает fsync сегментов.
     // Только после true журнал предзаписи можно очищать.

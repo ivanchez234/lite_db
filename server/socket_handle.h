@@ -9,6 +9,7 @@
 #else
     #include <arpa/inet.h>
     #include <netinet/in.h>
+    #include <netinet/tcp.h>
     #include <poll.h>
     #include <sys/socket.h>
     #include <unistd.h>
@@ -162,6 +163,15 @@ private:
 
 [[nodiscard]] inline bool send_all(SOCKET sock, const std::string& data) noexcept {
     return send_all(sock, data.data(), data.size());
+}
+
+// Отключает алгоритм Нейгла: маленькие пакеты уходят сразу, а не копятся,
+// пока не придёт подтверждение предыдущих. Для протокола «команда — ответ»
+// с короткими сообщениями задержка Нейгла вместе с отложенным ACK собеседника
+// может доходить до десятков миллисекунд на ответ.
+inline void set_no_delay(SOCKET sock) noexcept {
+    int flag = 1;
+    ::setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&flag), sizeof(flag));
 }
 
 // Сообщает собеседнику, что мы больше ничего не отправим, но читать продолжаем.

@@ -62,6 +62,7 @@ add_library(lite_db_core STATIC
     storage/storage.cpp
     storage/file_sync.cpp
     storage/json.cpp
+    storage/block_cache.cpp
     database/database.cpp
     database/wal.cpp
     Orm/sql_parser.cpp
@@ -87,10 +88,25 @@ add_executable(server_app main.cpp)
 target_link_libraries(server_app PRIVATE lite_db_core)
 lite_db_static_runtime(server_app)
 
+# Сервер читает setup.yaml из папки, откуда его запустили. Копия в каталоге
+# сборки позволяет запускать server_app прямо из build/. Править нужно файл
+# в корне проекта: при изменении CMake скопирует его заново на следующей сборке.
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/setup.yaml ${CMAKE_CURRENT_BINARY_DIR}/setup.yaml COPYONLY)
+
 # --- КОНСОЛЬНЫЙ КЛИЕНТ -------------------------------------------------------
 add_executable(client_app client.cpp)
 target_link_libraries(client_app PRIVATE lite_db_core)
 lite_db_static_runtime(client_app)
+
+# --- НАГРУЗОЧНЫЙ КЛИЕНТ --------------------------------------------------------
+add_executable(bench_client tools/bench_client.cpp)
+target_link_libraries(bench_client PRIVATE lite_db_core)
+lite_db_static_runtime(bench_client)
+
+# Замер движка хранения без сети: размер блока, сжатие, чтение с диска и из кеша.
+add_executable(bench_storage tools/bench_storage.cpp)
+target_link_libraries(bench_storage PRIVATE lite_db_core)
+lite_db_static_runtime(bench_storage)
 
 # --- ТЕСТЫ ----------------------------------------------------------------
 if(LITE_DB_BUILD_TESTS)

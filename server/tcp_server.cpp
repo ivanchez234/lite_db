@@ -209,6 +209,9 @@ void TcpServer::acceptLoop() {
 void TcpServer::acceptClient(SOCKET sock) {
     // Сокет сразу под владением: дальше он закроется сам в любом случае.
     auto connection = std::make_shared<Connection>(sock);
+#ifndef LITE_DB_EXPERIMENT_NAGLE
+    net::set_no_delay(sock);
+#endif
 
     if (clients_.size() >= kMaxConnections) {
         // Отказываем явно, вместо того чтобы плодить потоки без предела.

@@ -29,7 +29,8 @@ Wal::Wal(std::string path, Sync mode)
     : path_(std::move(path)), mode_(mode), file_(std::fopen(path_.c_str(), "a+b")) {}
 
 Wal::~Wal() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
+    synced_cv_.wait(lock, [this] { return !syncing_; });
     if (file_) push_to_disk();
     // Сам файл закроет FilePtr.
 }
@@ -57,14 +58,63 @@ void Wal::set_sync_mode(Sync mode) {
 bool Wal::append(const std::string& payload) {
     if (payload.empty() || payload.size() > kMaxRecordSize) return false;
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     if (!file_ || failed_) return false;
 
-    if (!write_record(payload) || !push_to_disk()) {
+    if (!write_record(payload)) {
         failed_ = true;
         return false;
     }
-    return true;
+    appends_.add();
+    bytes_.add(sizeof(uint32_t) * 2 + payload.size());
+
+    if (mode_ == Sync::none) return true;
+
+    if (mode_ == Sync::flush) {
+        if (std::fflush(file_.get()) == 0) return true;
+        failed_ = true;
+        return false;
+    }
+
+    // --- Групповой коммит (режим full) ---
+    //
+    // fsync стоит сотни микросекунд, и раньше каждая запись делала свой,
+    // держа мьютекс журнала: N параллельных записей ждали N fsync по очереди.
+    //
+    // Теперь первый, кто застал журнал без идущего fsync, становится лидером:
+    // проталкивает в ядро всё дописанное к этому моменту (своё и чужое)
+    // и делает ОДИН fsync уже без мьютекса. Пока он ждёт диск, другие потоки
+    // дописывают свои записи и встают в очередь. Когда лидер закончил, все,
+    // чьи записи попали в его fsync, получают ответ сразу; остальные выбирают
+    // нового лидера. Один fsync подтверждает сразу пачку записей.
+    const uint64_t my_seq = ++written_seq_;
+
+    for (;;) {
+        if (failed_) return false;              // чужой fsync упал — нашей записи верить нельзя
+        if (synced_seq_ >= my_seq) return true; // нашу запись уже подтвердил чей-то fsync
+
+        if (syncing_) {
+            synced_cv_.wait(lock);
+            continue;
+        }
+
+        syncing_ = true;
+        const uint64_t target = written_seq_;   // всё, что дописано к этому моменту
+        bool ok = std::fflush(file_.get()) == 0;
+        const int fd = LITE_DB_FILENO(file_.get());
+
+        lock.unlock();
+        if (ok) {
+            fsyncs_.add();
+            ok = LITE_DB_FSYNC(fd) == 0;
+        }
+        lock.lock();
+
+        syncing_ = false;
+        if (ok) synced_seq_ = target;
+        else    failed_ = true;
+        synced_cv_.notify_all();
+    }
 }
 
 bool Wal::write_record(const std::string& payload) {
@@ -90,6 +140,7 @@ bool Wal::push_to_disk() {
     if (mode_ == Sync::flush) return true;
 
     // Попросили устройство записать по-настоящему.
+    fsyncs_.add();
     return LITE_DB_FSYNC(LITE_DB_FILENO(file_.get())) == 0;
 }
 
@@ -125,7 +176,10 @@ std::vector<std::string> Wal::replay() const {
 }
 
 bool Wal::reset() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
+    // На всякий случай дожидаемся идущего fsync: файл сейчас будет закрыт.
+    // (FLUSH и так держит замок контрольной точки, и пишущих в этот момент нет.)
+    synced_cv_.wait(lock, [this] { return !syncing_; });
 
     file_.reset();
 

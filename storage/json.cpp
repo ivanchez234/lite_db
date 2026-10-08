@@ -13,7 +13,8 @@ class Parser {
 public:
     explicit Parser(std::string_view text) : s_(text) {}
 
-    bool object(Fields& out) {
+    // whole = true: после объекта не должно быть ничего, кроме пробелов.
+    bool object(Fields& out, bool whole) {
         skip_ws();
         if (!expect('{')) return false;
         skip_ws();
@@ -44,12 +45,14 @@ public:
             }
         }
 
+        if (!whole) return true;
         skip_ws();
         if (pos_ != s_.size()) return fail("лишние символы после объекта");
         return true;
     }
 
     const std::string& error() const { return error_; }
+    size_t position() const noexcept { return pos_; }
 
 private:
     char peek() const noexcept { return pos_ < s_.size() ? s_[pos_] : '\0'; }
@@ -202,9 +205,20 @@ private:
 bool parse_object(std::string_view input, Fields& out, std::string& error) {
     out.clear();
     Parser parser(input);
-    if (parser.object(out)) return true;
+    if (parser.object(out, true)) return true;
     error = parser.error();
     return false;
+}
+
+bool parse_object_prefix(std::string_view input, size_t& consumed, Fields& out, std::string& error) {
+    out.clear();
+    Parser parser(input);
+    if (!parser.object(out, false)) {
+        error = parser.error();
+        return false;
+    }
+    consumed = parser.position();
+    return true;
 }
 
 std::string quote(std::string_view text) {

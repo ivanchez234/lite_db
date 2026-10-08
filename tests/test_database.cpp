@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -338,4 +339,191 @@ TEST_CASE("непонятый SQL даёт ошибку, а не неверны�
     // Раньше DELETE с условием «age = 5 AND id = 1» удалял id 1, не глядя на age.
     REQUIRE(db.execute("DELETE FROM use WHERE age = 5 AND id = 1").rfind("ERR_SQL_PARSER", 0) == 0);
     REQUIRE(db.execute("SELECT use 1") == R"({"name":"Ivan","age":21,"is_active":true})");
+}
+
+TEST_CASE("колонка id в схеме заполняется ключом записи", "[database][regression]") {
+    // Схема вида "id:INT name:STRING" (так сделано в test.py). SQL-транслятор
+    // не кладёт id внутрь записи, поэтому без автозаполнения вставка отвергалась.
+    reset_state();
+    Database db(kWal);
+    REQUIRE(db.execute("CREATE col_test").rfind("OK", 0) == 0);
+    REQUIRE(db.execute("SCHEMA col_test id:INT name:STRING age:INT") == "OK: Schema applied");
+
+    REQUIRE(db.execute("INSERT INTO col_test (id, name, age) VALUES (250, 'Ivan_Student', 21)") == "OK");
+    REQUIRE(db.execute("SELECT * FROM col_test WHERE id = 250") == R"({"id":250,"name":"Ivan_Student","age":21})");
+    REQUIRE(db.execute("UPDATE col_test SET age = 22 WHERE id = 250") == "OK");
+    REQUIRE(db.execute("SELECT col_test 250") == R"({"id":250,"name":"Ivan_Student","age":22})");
+}
+
+// --- MPUT ----------------------------------------------------------------------
+
+namespace {
+
+std::string user_row(int id) {
+    return std::to_string(id) + R"( {"name":"U)" + std::to_string(id) + R"(","age":)"
+         + std::to_string(id % 90) + R"(,"is_active":true})";
+}
+
+std::string mput(int first, int count) {
+    std::string cmd = "MPUT use";
+    for (int id = first; id < first + count; ++id) cmd += " " + user_row(id);
+    return cmd;
+}
+
+} // namespace
+
+TEST_CASE("MPUT вставляет пакет одной записью журнала", "[database][mput]") {
+    reset_state();
+    Database db(kWal);
+    create_users(db);
+
+    REQUIRE(db.execute(mput(1, 50)) == "OK");
+    REQUIRE(wal_records() == 1);
+    REQUIRE(db.execute("SELECT use 1") == R"({"name":"U1","age":1,"is_active":true})");
+    REQUIRE(db.execute("SELECT use 50") == R"({"name":"U50","age":50,"is_active":true})");
+
+    const std::string stats = db.execute("STATS");
+    REQUIRE(stats.find("\"wal_appends\":1,") != std::string::npos);
+}
+
+TEST_CASE("MPUT атомарен: одна плохая строка — не вставляется ничего", "[database][mput]") {
+    reset_state();
+    Database db(kWal);
+    create_users(db);
+    REQUIRE(db.execute("INSERT use 7 " + user_row(7).substr(2)) == "OK");
+
+    // Неверный тип в середине пакета.
+    REQUIRE(db.execute("MPUT use " + user_row(1) + R"( 2 {"name":"B","age":"x","is_active":true} )" + user_row(3))
+            == "ERR_CONSTRAINT_VIOLATION");
+    // Занятый id.
+    REQUIRE(db.execute("MPUT use " + user_row(4) + " " + user_row(7)) == "ERR_ID_EXISTS");
+    // Повтор id внутри пакета.
+    REQUIRE(db.execute("MPUT use " + user_row(5) + " " + user_row(5)) == "ERR_ID_EXISTS");
+    // Синтаксис.
+    REQUIRE(db.execute("MPUT use 1 {\"name\":") == "ERR_INVALID_JSON");
+    REQUIRE(db.execute("MPUT use x {}") == "ERR_INVALID_ID");
+    REQUIRE(db.execute("MPUT use") == "ERR_EMPTY_BODY");
+
+    for (int id : {1, 2, 3, 4, 5}) REQUIRE(db.execute("SELECT use " + std::to_string(id)) == "ERR_NOT_FOUND");
+    REQUIRE(wal_records() == 1);   // только INSERT use 7
+}
+
+TEST_CASE("MPUT восстанавливается после аварии, даже если часть пакета уже на диске", "[database][mput][recovery]") {
+    // Пакет больше блока: при вставке часть строк сама сбросится на диск,
+    // часть останется в буфере. После аварии повтор MPUT не должен
+    // отвергнуть пакет из-за уже записанных строк и потерять остальные.
+    reset_state();
+    std::error_code ec;
+    fs::remove_all("data_snapshot", ec);
+    fs::remove("wal_snapshot.log", ec);
+
+    constexpr int kRows = 400;
+    {
+        Database db(kWal);
+        create_users(db);
+        REQUIRE(db.execute(mput(1, kRows)) == "OK");
+        REQUIRE(fs::exists("data/use/seg_0.db"));   // часть пакета действительно на диске
+
+        fs::copy("data", "data_snapshot", fs::copy_options::recursive);
+        fs::copy_file(kWal, "wal_snapshot.log");
+    }
+
+    fs::remove_all("data");
+    fs::rename("data_snapshot", "data");
+    fs::remove(kWal);
+    fs::rename("wal_snapshot.log", kWal);
+
+    Database recovered(kWal);
+    recovered.recover_from_wal();
+    for (int id : {1, 100, 250, kRows}) {
+        INFO(id);
+        REQUIRE(recovered.execute("SELECT use " + std::to_string(id))
+                == R"({"name":"U)" + std::to_string(id) + R"(","age":)" + std::to_string(id % 90)
+                   + R"(,"is_active":true})");
+    }
+}
+
+// --- Кеш блоков, настройки, STATS ------------------------------------------------
+
+TEST_CASE("кеш блоков: повторное чтение не распаковывает блок, данные те же", "[database][cache]") {
+    reset_state();
+    Database db(kWal);
+    create_users(db);
+    REQUIRE(db.execute(mput(1, 200)) == "OK");
+    REQUIRE(db.execute("FLUSH").rfind("OK", 0) == 0);
+
+    const std::string first = db.execute("SELECT use 150");
+    const std::string stats1 = db.execute("STATS");
+    const std::string second = db.execute("SELECT use 150");
+    const std::string stats2 = db.execute("STATS");
+
+    REQUIRE(first == R"({"name":"U150","age":60,"is_active":true})");
+    REQUIRE(second == first);
+
+    auto number = [](const std::string& json, const std::string& key) {
+        const size_t at = json.find("\"" + key + "\":");
+        REQUIRE(at != std::string::npos);
+        return std::stoull(json.substr(at + key.size() + 3));
+    };
+    REQUIRE(number(stats2, "cache_hits") == number(stats1, "cache_hits") + 1);
+    REQUIRE(number(stats2, "blocks_read") == number(stats1, "blocks_read"));   // не распаковывали
+}
+
+TEST_CASE("кеш блоков: смена схемы сбрасывает кеш", "[database][cache]") {
+    // Распаковка зависит от схемы (какая колонка BOOL), поэтому старые
+    // распакованные копии после SCHEMA использовать нельзя.
+    reset_state();
+    Database db(kWal);
+    create_users(db);
+    REQUIRE(db.execute(mput(1, 50)) == "OK");
+    REQUIRE(db.execute("FLUSH").rfind("OK", 0) == 0);
+    REQUIRE(db.execute("SELECT use 10").front() == '{');   // блок в кеше
+
+    REQUIRE(db.execute("SCHEMA use name:STRING age:INT is_active:BOOL") == "OK: Schema applied");
+    REQUIRE(db.execute("SELECT use 10") == R"({"name":"U10","age":10,"is_active":true})");
+}
+
+TEST_CASE("кеш блоков: параллельные чтения из кеша и мимо него", "[database][cache][concurrency]") {
+    reset_state();
+    std::ofstream("test_cache_setup.yaml") << "block_cache_mb: 1\n";   // маленький — с вытеснением
+    Database db(kWal);
+    db.load_config("test_cache_setup.yaml");
+    create_users(db);
+    for (int first = 1; first <= 2000; first += 500) REQUIRE(db.execute(mput(first, 500)) == "OK");
+    REQUIRE(db.execute("FLUSH").rfind("OK", 0) == 0);
+
+    std::atomic<int> bad{0};
+    std::vector<std::thread> readers;
+    for (int r = 0; r < 4; ++r) {
+        readers.emplace_back([&, r] {
+            for (int i = 0; i < 1500; ++i) {
+                const int id = 1 + (i * 37 + r * 101) % 2000;
+                const std::string expected = R"({"name":"U)" + std::to_string(id) + R"(","age":)"
+                                           + std::to_string(id % 90) + R"(,"is_active":true})";
+                if (db.execute("SELECT use " + std::to_string(id)) != expected) bad.fetch_add(1);
+            }
+        });
+    }
+    for (auto& t : readers) t.join();
+    REQUIRE(bad.load() == 0);
+}
+
+TEST_CASE("настройки block_size_kb и block_cache_mb читаются из конфигурации", "[database]") {
+    reset_state();
+    std::ofstream("test_block_setup.yaml") << "block_size_kb: 16\nblock_cache_mb: 0\n\ntables:\n"
+                                              "  - name: use\n    schema:\n      - name: STRING\n"
+                                              "      - age: INT\n      - is_active: BOOL\n";
+    Database db(kWal);
+    db.load_config("test_block_setup.yaml");
+
+    // При блоке 16 КБ 100 коротких записей ещё не набирают блок.
+    REQUIRE(db.execute(mput(1, 100)) == "OK");
+    REQUIRE_FALSE(fs::exists("data/use/seg_0.db"));
+    REQUIRE(db.execute("FLUSH").rfind("OK", 0) == 0);
+    REQUIRE(fs::exists("data/use/seg_0.db"));
+
+    // Кеш выключен: повторное чтение снова распаковывает блок.
+    REQUIRE(db.execute("SELECT use 5").front() == '{');
+    REQUIRE(db.execute("SELECT use 5").front() == '{');
+    REQUIRE(db.execute("STATS").find("\"cache_hits\":0") != std::string::npos);
 }

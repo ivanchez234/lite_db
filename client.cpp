@@ -53,6 +53,9 @@ int main(int argc, char** argv) {
             std::cerr << "Could not create socket" << std::endl;
             exit_code = 1;
         } else {
+            // Без задержки Нейгла: короткие команды уходят сразу.
+            net::set_no_delay(sock.get());
+
             sockaddr_in addr{};
             addr.sin_family = AF_INET;
             addr.sin_port   = htons(static_cast<unsigned short>(port));

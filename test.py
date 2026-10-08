@@ -8,7 +8,7 @@ def send_cmd(cmd):
 
 print("1. Подготовка таблицы...")
 print(send_cmd("CREATE col_test"))
-print(send_cmd("SCHEMA id:INT name:STRING age:INT"))
+print(send_cmd("SCHEMA col_test id:INT name:STRING age:INT"))
 
 print("\n2. Пишем 500 записей (Они ложатся в write_buffer как строки)...")
 for i in range(500):

@@ -1,6 +1,8 @@
 #include "database.h"
 #include "../Orm/sql_parser.h"
 #include <sstream>
+#include <cctype>
+#include <string_view>
 #include <algorithm>
 #include <iostream>
 #include <fstream>
@@ -89,7 +91,12 @@ void Database::recover_from_wal() {
 void Database::load_config(const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
-        std::cout << "[Config] No setup.yaml found, skipping auto-init." << std::endl;
+        // Путь целиком: относительный путь считается от папки запуска,
+        // и без него непонятно, где сервер искал файл.
+        std::error_code ec;
+        const auto where = fs::absolute(filename, ec);
+        std::cout << "[Config] " << (ec ? filename : where.string())
+                  << " not found - starting without tables from config" << std::endl;
         return;
     }
 
@@ -103,6 +110,34 @@ void Database::load_config(const std::string& filename) {
 
         // 1. Проверяем отступ (количество пробелов в начале)
         size_t indent = line.find_first_not_of(' ');
+
+        // Размер кеша распакованных блоков, МБ (0 — выключен).
+        if (indent == 0 && line.find("block_cache_mb:") == 0) {
+            try {
+                const long long mb = std::stoll(trim_cmd(line.substr(line.find(':') + 1)));
+                if (mb < 0) throw std::out_of_range("negative");
+                storage.set_block_cache_bytes(static_cast<size_t>(mb) * 1024u * 1024u);
+                std::cout << "[Config] Block cache: " << mb << " MB" << std::endl;
+            } catch (...) {
+                std::cout << "[Config] Bad block_cache_mb, keeping default" << std::endl;
+            }
+            in_schema = false;
+            continue;
+        }
+
+        // Сколько КБ записей копить перед сжатием в блок.
+        if (indent == 0 && line.find("block_size_kb:") == 0) {
+            try {
+                const long long kb = std::stoll(trim_cmd(line.substr(line.find(':') + 1)));
+                if (kb < 1 || kb > 16 * 1024) throw std::out_of_range("block size");
+                storage.set_block_size(static_cast<size_t>(kb) * 1024u);
+                std::cout << "[Config] Block size: " << kb << " KB" << std::endl;
+            } catch (...) {
+                std::cout << "[Config] Bad block_size_kb (1..16384), keeping default" << std::endl;
+            }
+            in_schema = false;
+            continue;
+        }
 
         // Глобальная настройка: насколько надёжно журнал проталкивается на диск.
         if (indent == 0 && line.find("wal_sync:") != std::string::npos) {
@@ -182,6 +217,21 @@ std::string Database::execute(const std::string& raw_query) {
         // Данные на диске — черновик можно сжечь.
         if (!wal.reset()) return "ERR_WAL_RESET_FAILED";
         return "OK: All buffers flushed to disk";
+    }
+
+    // STATS — счётчики для замеров производительности, одной строкой JSON.
+    if (cmd == "STATS") {
+        const StorageStats& s = storage.stats();
+        return "{\"wal_appends\":"            + std::to_string(wal.appends())
+             + ",\"wal_fsyncs\":"             + std::to_string(wal.fsyncs())
+             + ",\"wal_bytes\":"              + std::to_string(wal.bytes())
+             + ",\"blocks_written\":"         + std::to_string(s.blocks_written.get())
+             + ",\"block_bytes_raw\":"        + std::to_string(s.block_bytes_raw.get())
+             + ",\"block_bytes_compressed\":" + std::to_string(s.block_bytes_compressed.get())
+             + ",\"blocks_read\":"            + std::to_string(s.blocks_read.get())
+             + ",\"cache_hits\":"             + std::to_string(storage.cache_hits())
+             + ",\"cache_misses\":"           + std::to_string(storage.cache_misses())
+             + "}";
     }
 
     // Извлекаем имя таблицы (делаем это ДО блокировок, чтобы не тормозить потоки)
@@ -273,6 +323,48 @@ std::string Database::execute(const std::string& raw_query) {
         // UPDATE — как в SQL: меняет только переданные поля существующей записи.
         const WriteMode mode = (cmd == "INSERT") ? WriteMode::insert : WriteMode::update;
         return to_response(storage.insert(table_name, id, body, mode, log));
+    }
+
+    // 4б. MPUT — пакетная вставка: MPUT t id {json} id {json} ...
+    if (cmd == "MPUT") {
+        std::string rest;
+        std::getline(ss, rest);
+
+        Storage::BatchRows rows;
+        size_t pos = 0;
+        while (true) {
+            while (pos < rest.size() && std::isspace(static_cast<unsigned char>(rest[pos]))) ++pos;
+            if (pos >= rest.size()) break;
+
+            // id — целое число до пробела
+            const size_t id_start = pos;
+            if (rest[pos] == '-') ++pos;
+            while (pos < rest.size() && std::isdigit(static_cast<unsigned char>(rest[pos]))) ++pos;
+            int id = 0;
+            try {
+                size_t used = 0;
+                id = std::stoi(rest.substr(id_start, pos - id_start), &used);
+                if (used != pos - id_start) return "ERR_INVALID_ID";
+            } catch (...) {
+                return "ERR_INVALID_ID";
+            }
+
+            lite_db::json::Fields fields;
+            std::string error;
+            size_t consumed = 0;
+            if (!lite_db::json::parse_object_prefix(std::string_view(rest).substr(pos), consumed, fields, error)) {
+                return "ERR_INVALID_JSON";
+            }
+            pos += consumed;
+            rows.emplace_back(id, std::move(fields));
+        }
+
+        if (rows.empty()) return "ERR_EMPTY_BODY";
+
+        std::shared_lock<std::shared_mutex> lock(checkpoint_mutex);
+        // При восстановлении строки, уже попавшие на диск до аварии,
+        // пропускаются — иначе пакет целиком отвергся бы и остаток потерялся.
+        return to_response(storage.insert_batch(table_name, rows, is_recovering, log));
     }
 
     // 5. DELETE
