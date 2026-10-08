@@ -121,15 +121,34 @@ def test_driver(db, port):
     except db.IntegrityError:
         print("  ok: повторный id -> IntegrityError")
 
-    try:
-        cur.execute("INSERT INTO use (id, name, age, is_active) VALUES (?, ?, ?, ?)",
-                    (2, "x', 1, 1); DELETE FROM use WHERE id = 1; --", 1, True))
-        raise AssertionError("опасная строка должна была быть отвергнута")
-    except db.DataError:
-        print("  ok: строка с кавычками отвергнута до отправки (нет инъекции)")
-
+    # Попытка инъекции: кавычка экранируется, и строка остаётся просто данными.
+    evil = "x', 1, 1); DELETE FROM use WHERE id = 1; --"
+    cur.execute("INSERT INTO use (id, name, age, is_active) VALUES (?, ?, ?, ?)",
+                (2, evil, 1, True))
+    cur.execute("SELECT * FROM use WHERE id = ?", (2,))
+    check(cur.fetchone() == (evil, 1, True), "строка с кавычками сохранена как данные")
     cur.execute("SELECT * FROM use WHERE id = ?", (1,))
-    check(cur.fetchone() == ("Alex", 30, True), "после попытки инъекции данные целы")
+    check(cur.fetchone() == ("Alex", 30, True), "попытка инъекции ничего не изменила")
+
+    # Раньше запятая обрезала значение: "Smith, John" -> "Smith".
+    cur.execute("INSERT INTO use (id, name, age, is_active) VALUES (?, ?, ?, ?)",
+                (3, 'Smith, John "JJ" {x}: y', 40, False))
+    cur.execute("SELECT * FROM use WHERE id = ?", (3,))
+    check(cur.fetchone() == ('Smith, John "JJ" {x}: y', 40, False), "запятые, кавычки и скобки в строке целы")
+
+    # UPDATE как в SQL: меняет только указанные поля.
+    cur.execute("UPDATE use SET age = ? WHERE id = ?", (41, 3))
+    check(cur.rowcount == 1, "UPDATE существующей записи")
+    cur.execute("SELECT * FROM use WHERE id = ?", (3,))
+    check(cur.fetchone() == ('Smith, John "JJ" {x}: y', 41, False), "UPDATE не тронул другие поля")
+    cur.execute("UPDATE use SET age = ? WHERE id = ?", (1, 999))
+    check(cur.rowcount == 0, "UPDATE несуществующей записи — 0 строк, как в SQL")
+
+    try:
+        cur.execute("SELECT * FROM use WHERE age = ?", (30,))
+        raise AssertionError("WHERE не по id должен давать ошибку")
+    except db.ProgrammingError:
+        print("  ok: WHERE не по id -> ProgrammingError, а не вся таблица")
 
     # Много запросов подряд — все по одному соединению.
     for i in range(10, 210):
@@ -137,7 +156,7 @@ def test_driver(db, port):
                     (i, f"user{i}", i % 90, i % 2 == 0))
     cur.execute("SELECT * FROM use")
     rows = cur.fetchall()
-    check(len(rows) == 201, "200 запросов по одному соединению + SELECT ALL")
+    check(len(rows) == 203, "200 запросов по одному соединению + SELECT ALL")
     check([d[0] for d in cur.description] == ["id", "name", "age", "is_active"],
           "SELECT ALL отдаёт id первой колонкой")
 

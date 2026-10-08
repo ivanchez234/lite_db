@@ -29,8 +29,9 @@ void report_socket_error(const char* what) {
 
 } // namespace
 
-TcpServer::TcpServer(int port, Database* db, unsigned workerCount)
-    : port_(port), database_(db), workerCount_(workerCount == 0 ? 1 : workerCount) {}
+TcpServer::TcpServer(int port, Database* db, unsigned workerCount, std::string host)
+    : port_(port), host_(std::move(host)), database_(db),
+      workerCount_(workerCount == 0 ? 1 : workerCount) {}
 
 TcpServer::~TcpServer() {
     stop();
@@ -61,7 +62,7 @@ bool TcpServer::open() {
         workers_.emplace_back(&TcpServer::workerThread, this, static_cast<int>(i));
     }
 
-    std::cout << "Server started on port " << port_ << std::endl;
+    std::cout << "Server started on " << host_ << ":" << port_ << std::endl;
     return true;
 }
 
@@ -85,9 +86,12 @@ bool TcpServer::openListeningSocket() {
 #endif
 
     sockaddr_in address{};
-    address.sin_family      = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port        = htons(static_cast<unsigned short>(port_));
+    address.sin_family = AF_INET;
+    address.sin_port   = htons(static_cast<unsigned short>(port_));
+    if (inet_pton(AF_INET, host_.c_str(), &address.sin_addr) != 1) {
+        std::cerr << "[Network] Bad listen address: " << host_ << std::endl;
+        return false;
+    }
 
     if (::bind(candidate.get(), reinterpret_cast<sockaddr*>(&address),
                sizeof(address)) == SOCKET_ERROR) {

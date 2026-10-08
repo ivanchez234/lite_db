@@ -61,7 +61,10 @@ struct Connection {
 // всех, поэтому после него Database можно безопасно разрушать.
 class TcpServer {
 public:
-    TcpServer(int port, Database* db, unsigned workerCount = 5);
+    // host — адрес, на котором слушать. По умолчанию только 127.0.0.1:
+    // аутентификации нет, и открывать базу в сеть надо осознанно ("0.0.0.0").
+    TcpServer(int port, Database* db, unsigned workerCount = 5,
+              std::string host = "127.0.0.1");
 
     // Вызывать только после того, как run() вернул управление
     // (или если run() вообще не запускался).
@@ -110,6 +113,7 @@ private:
     };
 
     int               port_;
+    std::string       host_;
     Database*         database_;
     unsigned          workerCount_;
     net::SocketHandle listener_;

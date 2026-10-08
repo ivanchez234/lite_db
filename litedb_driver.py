@@ -67,6 +67,8 @@ _ERRORS = {
     "ERR_CONSTRAINT_VIOLATION": IntegrityError,
     "ERR_TABLE_NOT_FOUND": ProgrammingError,
     "ERR_SQL_PARSER": ProgrammingError,
+    "ERR_INVALID_JSON": DataError,
+    "ERR_READ_FAILED": OperationalError,
     "ERR_UNKNOWN_COMMAND": ProgrammingError,
     "ERR_WAL_WRITE_FAILED": OperationalError,
     "ERR_FLUSH_FAILED": OperationalError,
@@ -76,10 +78,9 @@ _ERRORS = {
     "ERR_UNKNOWN_CRASH": InternalError,
 }
 
-# Символы, которые серверный разбор SQL и JSON пока не умеет экранировать.
-# Строку с ними не подставляем вовсе: иначе значение параметра могло бы
-# изменить сам запрос (SQL-инъекция) или тихо исказить данные.
-_FORBIDDEN_IN_STRINGS = set("'\",{}:\n\r\\")
+# Перевод строки в протоколе — конец команды, поэтому в значениях его быть
+# не может. Всё остальное (кавычки, запятые, скобки) экранируется.
+_FORBIDDEN_IN_STRINGS = set("\n\r")
 
 
 def connect(host="127.0.0.1", port=5555, timeout=5.0, **kwargs):
@@ -96,12 +97,12 @@ def _quote(value):
     if isinstance(value, (int, float)):
         return repr(value)
     if isinstance(value, str):
-        bad = sorted(set(value) & _FORBIDDEN_IN_STRINGS)
-        if bad:
-            raise DataError(
-                "строка содержит символы, которые lite_db пока не умеет "
-                f"экранировать: {''.join(bad)!r}")
-        return f"'{value}'"
+        if set(value) & _FORBIDDEN_IN_STRINGS:
+            raise DataError("строка не может содержать перевод строки: "
+                            "в протоколе lite_db он означает конец команды")
+        # Стандартное экранирование SQL: кавычка внутри строки удваивается.
+        # Значение остаётся данными и не может стать частью запроса.
+        return "'" + value.replace("'", "''") + "'"
     raise NotSupportedError(f"тип параметра не поддерживается: {type(value).__name__}")
 
 

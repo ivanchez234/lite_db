@@ -61,6 +61,7 @@ endfunction()
 add_library(lite_db_core STATIC
     storage/storage.cpp
     storage/file_sync.cpp
+    storage/json.cpp
     database/database.cpp
     database/wal.cpp
     Orm/sql_parser.cpp

@@ -1,6 +1,11 @@
 #include "storage.h"
 #include "byte_reader.h"
 #include "file_sync.h"
+#include "json.h"
+
+#include <charconv>
+#include <cmath>
+#include <cstdlib>
 
 #include <shared_mutex>
 #include <iostream>
@@ -486,10 +491,13 @@ std::string Storage::rebuild_json(const char* data_ptr, size_t payload_size, Tab
         if (!first) out += ",";
         first = false;
 
-        out += "\"" + col.name + "\":";
+        // Имена и строки — через экранирование: значение может содержать
+        // кавычки, обратные косые черты и т. п.
+        out += lite_db::json::quote(col.name);
+        out += ':';
 
         if (col.type == DataType::STRING || col.type == DataType::DATE) {
-            out += "\"" + val + "\"";
+            out += lite_db::json::quote(val);
         } else if (col.type == DataType::BOOL) {
             out += (val == "true" || val == "1") ? "true" : "false";
         } else {
@@ -634,94 +642,124 @@ Table* Storage::lookup_table(const std::string& name) {
     return find_table(name);
 }
 
-std::map<std::string, std::string> Storage::parse_json_manual(std::string s) {
-    std::map<std::string, std::string> res;
-    s.erase(std::remove(s.begin(), s.end(), '{'), s.end());
-    s.erase(std::remove(s.begin(), s.end(), '}'), s.end());
-    s.erase(std::remove(s.begin(), s.end(), '\"'), s.end());
+namespace {
 
-    std::stringstream ss(s);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
-        size_t colon = item.find(':');
-        if (colon != std::string::npos) {
-            std::string k = item.substr(0, colon);
-            std::string v = item.substr(colon + 1);
-            k.erase(0, k.find_first_not_of(' ')); k.erase(k.find_last_not_of(' ') + 1);
-            v.erase(0, v.find_first_not_of(' ')); v.erase(v.find_last_not_of(' ') + 1);
-            res[k] = v;
-        }
-    }
-    return res;
+bool is_leap_year(int year) noexcept {
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
 }
 
+// YYYY-MM-DD по настоящему календарю: 2023-02-29 — ошибка, 2024-02-29 — нет.
 bool is_valid_date(const std::string& date) {
-    if (date.length() != 10) return false;
-    if (date[4] != '-' || date[7] != '-') return false;
-    for (int i = 0; i < 10; ++i) {
+    if (date.size() != 10 || date[4] != '-' || date[7] != '-') return false;
+    for (size_t i = 0; i < date.size(); ++i) {
         if (i == 4 || i == 7) continue;
-        if (!std::isdigit(date[i])) return false;
+        if (date[i] < '0' || date[i] > '9') return false;
     }
-    int month = std::stoi(date.substr(5, 2));
-    int day = std::stoi(date.substr(8, 2));
-    if (month < 1 || month > 12) return false;
-    if (day < 1 || day > 31) return false; 
-    return true;
+
+    const int year  = std::stoi(date.substr(0, 4));
+    const int month = std::stoi(date.substr(5, 2));
+    const int day   = std::stoi(date.substr(8, 2));
+    if (month < 1 || month > 12 || day < 1) return false;
+
+    static constexpr int kDaysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const int max_day = (month == 2 && is_leap_year(year)) ? 29 : kDaysInMonth[month - 1];
+    return day <= max_day;
 }
 
-bool Storage::validate_types(Table* t, const std::map<std::string, std::string>& data) {
-    if (t->schema.empty()) return true; 
+// Целое int32 целиком. Раньше проверка шла через std::stoi, который читает
+// начало строки и молча отбрасывает хвост: "30abc" проходило как 30.
+bool is_int32(const std::string& text) {
+    if (!lite_db::json::is_number(text)) return false;
+    if (text.find_first_of(".eE") != std::string::npos) return false;
+    int value = 0;
+    const char* const end = text.data() + text.size();
+    const auto [ptr, ec] = std::from_chars(text.data(), end, value);
+    return ec == std::errc() && ptr == end;
+}
+
+// Конечное число: 1e999 по грамматике JSON — число, но это бесконечность.
+bool is_finite_double(const std::string& text) {
+    if (!lite_db::json::is_number(text)) return false;
+    char* end = nullptr;
+    const double value = std::strtod(text.c_str(), &end);
+    return end == text.c_str() + text.size() && std::isfinite(value);
+}
+
+// В протоколе перевод строки — конец ответа. Значение с переводом строки
+// разорвало бы ответ на два, поэтому такие значения не принимаются.
+bool has_line_break(const std::string& text) {
+    return text.find_first_of("\r\n") != std::string::npos;
+}
+
+} // namespace
+
+bool Storage::validate_fields(Table* t, FieldMap& fields) {
+    for (const auto& field : fields) {
+        if (field.second.is_string && has_line_break(field.second.text)) return false;
+    }
+
+    // Без схемы проверять нечего: такая таблица хранит любые поля.
+    if (t->schema.empty()) return true;
+
+    // Ровно колонки схемы. Лишнее поле иначе молча сохранилось бы
+    // и никогда не вернулось бы в SELECT.
+    if (fields.size() != t->schema.size()) return false;
 
     for (const auto& col : t->schema) {
-        auto it = data.find(col.name);
-        if (it == data.end()) return false; 
+        const auto it = fields.find(col.name);
+        if (it == fields.end()) return false;
+        lite_db::json::Value& value = it->second;
 
-        const std::string& val = it->second;
-        try {
-            if (col.type == DataType::INT) std::stoi(val);
-            else if (col.type == DataType::DOUBLE) std::stod(val);
-            else if (col.type == DataType::BOOL) {
-                if (val != "true" && val != "false" && val != "1" && val != "0") return false;
-            }
-            else if (col.type == DataType::DATE) {
-                if (!is_valid_date(val)) return false;
-            }
-        } catch (...) {
-            return false;
+        switch (col.type) {
+            case DataType::STRING:
+                if (!value.is_string) return false;
+                break;
+            case DataType::DATE:
+                if (!value.is_string || !is_valid_date(value.text)) return false;
+                break;
+            case DataType::INT:
+                if (value.is_string || !is_int32(value.text)) return false;
+                break;
+            case DataType::DOUBLE:
+                if (value.is_string || !is_finite_double(value.text)) return false;
+                break;
+            case DataType::BOOL:
+                // SQL присылает 1/0, JSON — true/false. Храним единообразно.
+                if (value.is_string) return false;
+                if (value.text == "true" || value.text == "1")       value.text = "true";
+                else if (value.text == "false" || value.text == "0") value.text = "false";
+                else return false;
+                break;
         }
     }
     return true;
 }
 
-bool Storage::pack_json(const std::string& json_str, Table* t, std::vector<char>& buf) {
-    auto data = parse_json_manual(json_str);
-    // Несоответствие схеме — обычный ответ клиенту, а не авария, поэтому код возврата.
-    if (!validate_types(t, data)) return false;
-
+std::vector<char> Storage::pack_fields(const FieldMap& fields) {
     BinaryHeader head;
-    head.keys_count = (uint32_t)data.size();
-    
+    head.keys_count = static_cast<uint32_t>(fields.size());
+
     std::vector<KeyRecord> records;
     std::vector<char> body;
     uint32_t offset = 0;
 
-    for (auto const& [k, v] : data) {
+    for (const auto& [name, value] : fields) {
         KeyRecord r;
-        r.key_hash = hash_string(k);
+        r.key_hash = hash_string(name);
         r.data_offset = offset;
-        r.data_size = (uint32_t)v.size();
+        r.data_size = static_cast<uint32_t>(value.text.size());
         records.push_back(r);
-        body.insert(body.end(), v.begin(), v.end());
-        offset += (uint32_t)v.size();
+        body.insert(body.end(), value.text.begin(), value.text.end());
+        offset += static_cast<uint32_t>(value.text.size());
     }
 
-    head.total_size = sizeof(BinaryHeader) + (uint32_t)(records.size() * sizeof(KeyRecord)) + (uint32_t)body.size();
+    head.total_size = static_cast<uint32_t>(sizeof(BinaryHeader) + records.size() * sizeof(KeyRecord) + body.size());
 
-    buf.clear();
+    std::vector<char> buf;
     buf.insert(buf.end(), (char*)&head, (char*)&head + sizeof(BinaryHeader));
     for (auto& r : records) buf.insert(buf.end(), (char*)&r, (char*)&r + sizeof(KeyRecord));
     buf.insert(buf.end(), body.begin(), body.end());
-    return true;
+    return buf;
 }
 
 bool Storage::create_table(const std::string& name) {
@@ -794,6 +832,12 @@ void Storage::load_schema(Table* t) {
 
 WriteResult Storage::insert(const std::string& table_name, int id, const std::string& json_str,
                            WriteMode mode, const WriteLog& log) {
+    // Разбор не зависит от таблицы, поэтому идёт до всех замков.
+    lite_db::json::Fields parsed;
+    std::string parse_error;
+    if (!lite_db::json::parse_object(json_str, parsed, parse_error)) return WriteResult::invalid_json;
+    FieldMap fields(parsed.begin(), parsed.end());
+
     Table* t = lookup_table(table_name);
     if (!t) return WriteResult::table_not_found;
 
@@ -803,10 +847,29 @@ WriteResult Storage::insert(const std::string& table_name, int id, const std::st
     // INSERT с одним id могут оба увидеть «свободно» и оба записаться.
     if (mode == WriteMode::insert && exists_locked(t, id)) return WriteResult::id_exists;
 
+    if (mode == WriteMode::update) {
+        // Как UPDATE в SQL: меняются только переданные поля, остальные
+        // берутся из текущей версии записи. У таблицы без схемы перечислить
+        // старые поля нельзя (в записи лежат только хеши имён), поэтому
+        // там UPDATE заменяет запись переданными полями.
+        std::vector<char> current;
+        const Lookup found = find_latest_locked(t, id, current);
+        if (found == Lookup::missing)    return WriteResult::not_found;
+        if (found == Lookup::read_error) return WriteResult::read_error;
+
+        for (const auto& col : t->schema) {
+            if (fields.count(col.name) != 0) continue;
+            lite_db::json::Value old;
+            if (!extract_field(current.data(), current.size(), col.name, old.text)) continue;
+            old.is_string = (col.type == DataType::STRING || col.type == DataType::DATE);
+            fields.emplace(col.name, std::move(old));
+        }
+    }
+
     // Сначала проверяем данные, потом пишем в журнал: мусор, который всё
     // равно будет отвергнут, не должен попадать в журнал.
-    std::vector<char> bin;
-    if (!pack_json(json_str, t, bin)) return WriteResult::invalid_data;
+    if (!validate_fields(t, fields)) return WriteResult::invalid_data;
+    const std::vector<char> bin = pack_fields(fields);
 
     // Журнал под замком таблицы: порядок записей в журнале совпадает
     // с порядком применения, и восстановление воспроизведёт ту же историю.
@@ -820,109 +883,64 @@ WriteResult Storage::insert(const std::string& table_name, int id, const std::st
     return WriteResult::ok;
 }
 
-std::string Storage::select(const std::string& table_name, int id, const std::string& target_key) {
-    Table* t = nullptr;
-    {
-        std::shared_lock<std::shared_mutex> lock(tables_mtx);
-        t = find_table(table_name);
-        if (!t) return "ERR_TABLE_NOT_FOUND";
-    }
-    // Чтение: несколько запросов к одной таблице идут одновременно.
-    std::shared_lock<std::shared_mutex> t_lock(t->mtx);
-    
-    auto extract = [&](const char* data_ptr, size_t payload_size) -> std::string {
-        if (!target_key.empty()) {
-            std::string val;
-            if (!extract_field(data_ptr, payload_size, target_key, val)) return "ERR_KEY_NOT_FOUND";
-            return val;
+Storage::Lookup Storage::find_latest_locked(Table* t, int id, std::vector<char>& payload) {
+    // Последняя версия записи — последняя по порядку: сначала в буфере
+    // (он новее диска), потом в блоке на диске. Надгробие означает «удалена».
+    auto scan = [id, &payload](const char* data, size_t size, bool& seen) {
+        bool alive = false;
+        size_t offset = 0;
+        RecordView rec;
+        while (next_record(data, size, offset, rec)) {
+            if (rec.id != id) continue;
+            seen  = true;
+            alive = rec.payload_size != 0;
+            if (alive) payload.assign(rec.payload, rec.payload + rec.payload_size);
         }
-        std::string json = rebuild_json(data_ptr, payload_size, t);
-        return json.empty() ? "ERR_NO_SCHEMA" : json;
+        return alive;
     };
 
-    // 1. ИЩЕМ В WRITE_BUFFER (Ждем до конца, берем самое свежее)
-    // В буфере данные лежат в обычном строковом (Row-based) виде, поэтому читаем напрямую!
-    bool found_in_buffer = false;
-    std::string latest_buffer_result = "ERR_NOT_FOUND";
-    size_t buf_off = 0;
-    RecordView rec;
+    bool seen = false;
+    const bool alive_in_buffer = scan(t->write_buffer.data(), t->write_buffer.size(), seen);
+    if (seen) return alive_in_buffer ? Lookup::found : Lookup::missing;
 
-    while (next_record(t->write_buffer.data(), t->write_buffer.size(), buf_off, rec)) {
-        if (rec.id == id) {
-            found_in_buffer = true;
-            if (rec.payload_size == 0) {
-                latest_buffer_result = "ERR_NOT_FOUND"; // Нашли надгробие!
-            } else {
-                latest_buffer_result = extract(rec.payload, rec.payload_size);
-            }
-            // НЕ ДЕЛАЕМ return. Продолжаем искать более свежие версии!
-        }
-    }
-
-    if (found_in_buffer) {
-        return latest_buffer_result;
-    }
-
-    // 2. ИЩЕМ НА ДИСКЕ В ИНДЕКСЕ
     // Именно find, а не operator[]: тот не const и под разделяемым замком
     // стал бы изменением карты из нескольких потоков сразу.
     const auto index_it = t->index.find(id);
-    if (index_it == t->index.end()) return "ERR_NOT_FOUND";
-    const FileLocation loc = index_it->second;
+    if (index_it == t->index.end()) return Lookup::missing;
 
-    std::ifstream in(loc.filename, std::ios::binary);
-    in.seekg(loc.offset);
+    std::ifstream in(index_it->second.filename, std::ios::binary);
+    if (!in) return Lookup::read_error;
+    in.seekg(index_it->second.offset);
 
-    CompressedBlockHeader header;
-    in.read((char*)&header, sizeof(header));
-    std::vector<char> comp(header.compressed_size);
-    in.read(comp.data(), header.compressed_size);
+    // read_block проверяет размеры из заголовка до выделения памяти.
+    std::vector<char> rows;
+    if (!read_block(in, t, rows)) return Lookup::read_error;
 
-    std::vector<char> orig(header.original_size);
-    
-    // ==========================================
-    // РАСПАКОВКА ЧЕРЕЗ ZLIB (DEFLATE)
-    // ==========================================
-    uLongf dest_len = header.original_size;
-    int uncomp_res = uncompress(
-        (Bytef*)orig.data(), 
-        &dest_len, 
-        (const Bytef*)comp.data(), 
-        header.compressed_size
-    );
+    return scan(rows.data(), rows.size(), seen) ? Lookup::found : Lookup::missing;
+}
 
-    if (uncomp_res != Z_OK) {
-        return "ERR_ZLIB_DECOMPRESSION_FAILED";
+std::string Storage::select(const std::string& table_name, int id, const std::string& target_key) {
+    Table* t = lookup_table(table_name);
+    if (!t) return "ERR_TABLE_NOT_FOUND";
+
+    // Чтение: несколько запросов к одной таблице идут одновременно.
+    std::shared_lock<std::shared_mutex> t_lock(t->mtx);
+
+    std::vector<char> payload;
+    switch (find_latest_locked(t, id, payload)) {
+        case Lookup::missing:    return "ERR_NOT_FOUND";
+        case Lookup::read_error: return "ERR_READ_FAILED";
+        case Lookup::found:      break;
     }
 
-    // ==========================================
-    // МАГИЯ: РАСПАКОВКА КОЛОНОК ОБРАТНО В СТРОКИ
-    // ==========================================
-    // Массив orig сейчас хранит колонки. Превращаем их обратно в удобные строки.
-    std::vector<char> row_orig = unpack_columns(orig, t);
-
-    // 3. ИЩЕМ В РАСПАКОВАННОМ БЛОКЕ (Используем row_orig вместо orig)
-    bool found_in_block = false;
-    std::string latest_block_result = "ERR_NOT_FOUND";
-    size_t offset = 0;
-    RecordView block_rec;
-
-    while (next_record(row_orig.data(), row_orig.size(), offset, block_rec)) {
-        if (block_rec.id == id) {
-            found_in_block = true;
-            if (block_rec.payload_size == 0) {
-                latest_block_result = "ERR_NOT_FOUND"; // Нашли надгробие в блоке!
-            } else {
-                latest_block_result = extract(block_rec.payload, block_rec.payload_size);
-            }
-        }
-    }
-    
-    if (found_in_block) {
-        return latest_block_result;
+    if (!target_key.empty()) {
+        std::string value;
+        if (!extract_field(payload.data(), payload.size(), target_key, value)) return "ERR_KEY_NOT_FOUND";
+        return value;
     }
 
-    return "ERR_NOT_FOUND";
+    const std::string json = rebuild_json(payload.data(), payload.size(), t);
+    return json.empty() ? "ERR_NO_SCHEMA" : json;
 }
 std::string Storage::select_all(const std::string& table_name) {
     Table* t = nullptr;

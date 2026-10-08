@@ -204,3 +204,138 @@ TEST_CASE("записи в разные таблицы и FLUSH идут пар�
         }
     }
 }
+
+// --- Данные и проверка по схеме ---------------------------------------------
+
+TEST_CASE("строки с запятыми, кавычками и экранированием сохраняются как есть", "[database][regression]") {
+    // Раньше "Smith, John" молча сохранялось как "Smith".
+    reset_state();
+    Database db(kWal);
+    create_users(db);
+
+    REQUIRE(db.execute(R"(INSERT use 1 {"name":"Smith, John","age":40,"is_active":true})") == "OK");
+    REQUIRE(db.execute(R"(INSERT use 2 {"name":"say \"hi\" \\ {x}: y","age":1,"is_active":false})") == "OK");
+    REQUIRE(db.execute("INSERT INTO use (id, name, age, is_active) VALUES (3, 'O''Brien, Pat', 2, 1)") == "OK");
+
+    // Ответ — корректный JSON с экранированием.
+    REQUIRE(db.execute("SELECT use 1") == R"({"name":"Smith, John","age":40,"is_active":true})");
+    REQUIRE(db.execute("SELECT use 2") == R"({"name":"say \"hi\" \\ {x}: y","age":1,"is_active":false})");
+    REQUIRE(db.execute("SELECT use 3 name") == "O'Brien, Pat");
+
+    // И то же самое после сброса на диск и перезапуска.
+    REQUIRE(db.execute("FLUSH").rfind("OK", 0) == 0);
+    Database reopened(kWal);
+    REQUIRE(reopened.execute("SELECT use 1") == R"({"name":"Smith, John","age":40,"is_active":true})");
+    REQUIRE(reopened.execute("SELECT use 3 name") == "O'Brien, Pat");
+}
+
+TEST_CASE("типы проверяются строго", "[database]") {
+    reset_state();
+    Database db(kWal);
+    create_users(db);
+
+    const auto insert = [&](const std::string& body) { return db.execute("INSERT use 1 " + body); };
+
+    // "30abc" раньше проходило как 30 (std::stoi читает начало строки).
+    REQUIRE(insert(R"({"name":"A","age":"30","is_active":true})")    == "ERR_CONSTRAINT_VIOLATION");
+    REQUIRE(insert(R"({"name":"A","age":30.5,"is_active":true})")    == "ERR_CONSTRAINT_VIOLATION");
+    REQUIRE(insert(R"({"name":"A","age":99999999999,"is_active":true})") == "ERR_CONSTRAINT_VIOLATION");
+    REQUIRE(insert(R"({"name":5,"age":30,"is_active":true})")        == "ERR_CONSTRAINT_VIOLATION");
+    REQUIRE(insert(R"({"name":"A","age":30,"is_active":"yes"})")     == "ERR_CONSTRAINT_VIOLATION");
+    // Лишнее поле раньше молча сохранялось и никогда не возвращалось.
+    REQUIRE(insert(R"({"name":"A","age":30,"is_active":true,"x":1})") == "ERR_CONSTRAINT_VIOLATION");
+    REQUIRE(insert(R"({"name":"A","age":30})")                       == "ERR_CONSTRAINT_VIOLATION");
+    // Перевод строки разорвал бы построчный протокол.
+    REQUIRE(insert(R"({"name":"line\nbreak","age":30,"is_active":true})") == "ERR_CONSTRAINT_VIOLATION");
+    REQUIRE(insert(R"({"name":"A","age":30,"is_active":true)")       == "ERR_INVALID_JSON");
+    REQUIRE(insert(R"(name=A)")                                      == "ERR_INVALID_JSON");
+
+    REQUIRE(wal_records() == 0);   // отвергнутое в журнал не попало
+    REQUIRE(insert(R"({"name":"A","age":-30,"is_active":0})") == "OK");
+    REQUIRE(db.execute("SELECT use 1") == R"({"name":"A","age":-30,"is_active":false})");
+}
+
+TEST_CASE("DATE проверяется по календарю", "[database]") {
+    reset_state();
+    Database db(kWal);
+    REQUIRE(db.execute("CREATE events").rfind("OK", 0) == 0);
+    REQUIRE(db.execute("SCHEMA events title:STRING day:DATE") == "OK: Schema applied");
+
+    REQUIRE(db.execute(R"(INSERT events 1 {"title":"a","day":"2024-02-29"})") == "OK");
+    REQUIRE(db.execute(R"(INSERT events 2 {"title":"b","day":"2023-02-29"})") == "ERR_CONSTRAINT_VIOLATION");
+    REQUIRE(db.execute(R"(INSERT events 3 {"title":"c","day":"2024-04-31"})") == "ERR_CONSTRAINT_VIOLATION");
+    REQUIRE(db.execute(R"(INSERT events 4 {"title":"d","day":"2024-13-01"})") == "ERR_CONSTRAINT_VIOLATION");
+    REQUIRE(db.execute(R"(INSERT events 5 {"title":"e","day":"1900-02-29"})") == "ERR_CONSTRAINT_VIOLATION");
+    REQUIRE(db.execute(R"(INSERT events 6 {"title":"f","day":"2000-02-29"})") == "OK");
+}
+
+// --- UPDATE как в SQL ----------------------------------------------------------
+
+TEST_CASE("UPDATE меняет только переданные поля", "[database]") {
+    reset_state();
+    Database db(kWal);
+    create_users(db);
+
+    REQUIRE(db.execute(R"(INSERT use 1 {"name":"Ivan","age":21,"is_active":true})") == "OK");
+    REQUIRE(db.execute(R"(UPDATE use 1 {"age":22})") == "OK");
+    REQUIRE(db.execute("SELECT use 1") == R"({"name":"Ivan","age":22,"is_active":true})");
+
+    // SQL-форма — то же самое.
+    REQUIRE(db.execute("UPDATE use SET is_active = 0 WHERE id = 1") == "OK");
+    REQUIRE(db.execute("SELECT use 1") == R"({"name":"Ivan","age":22,"is_active":false})");
+
+    // Поле берётся и с диска: сбрасываем и обновляем снова.
+    REQUIRE(db.execute("FLUSH").rfind("OK", 0) == 0);
+    REQUIRE(db.execute("UPDATE use SET name = 'Ivan, Jr' WHERE id = 1") == "OK");
+    REQUIRE(db.execute("SELECT use 1") == R"({"name":"Ivan, Jr","age":22,"is_active":false})");
+
+    // Несуществующую запись UPDATE не создаёт.
+    REQUIRE(db.execute(R"(UPDATE use 99 {"age":1})") == "ERR_NOT_FOUND");
+    REQUIRE(db.execute("SELECT use 99") == "ERR_NOT_FOUND");
+    // Неверный тип в частичном обновлении тоже ловится.
+    REQUIRE(db.execute(R"(UPDATE use 1 {"age":"много"})") == "ERR_CONSTRAINT_VIOLATION");
+}
+
+TEST_CASE("частичный UPDATE восстанавливается из журнала после аварии", "[database][recovery]") {
+    reset_state();
+    std::error_code ec;
+    fs::remove_all("data_snapshot", ec);
+    fs::remove("wal_snapshot.log", ec);
+
+    {
+        Database db(kWal);
+        create_users(db);
+        REQUIRE(db.execute(R"(INSERT use 1 {"name":"Ivan","age":21,"is_active":true})") == "OK");
+        REQUIRE(db.execute("UPDATE use SET age = 30 WHERE id = 1") == "OK");
+        fs::copy("data", "data_snapshot", fs::copy_options::recursive);
+        fs::copy_file(kWal, "wal_snapshot.log");
+    }
+
+    fs::remove_all("data");
+    fs::rename("data_snapshot", "data");
+    fs::remove(kWal);
+    fs::rename("wal_snapshot.log", kWal);
+
+    Database recovered(kWal);
+    recovered.recover_from_wal();
+    REQUIRE(recovered.execute("SELECT use 1") == R"({"name":"Ivan","age":30,"is_active":true})");
+}
+
+// --- SQL, который мы не понимаем, отвергается -----------------------------------
+
+TEST_CASE("непонятый SQL даёт ошибку, а не неверный результат", "[database][regression]") {
+    reset_state();
+    Database db(kWal);
+    create_users(db);
+    REQUIRE(db.execute(R"(INSERT use 1 {"name":"Ivan","age":21,"is_active":true})") == "OK");
+    REQUIRE(db.execute(R"(INSERT use 2 {"name":"Maria","age":22,"is_active":true})") == "OK");
+
+    // Раньше возвращалась вся таблица.
+    REQUIRE(db.execute("SELECT * FROM use WHERE age = 22").rfind("ERR_SQL_PARSER", 0) == 0);
+    // Раньше запись получала id = -1.
+    REQUIRE(db.execute("INSERT INTO use (name, age, is_active) VALUES ('X', 1, 1)").rfind("ERR_SQL_PARSER", 0) == 0);
+    REQUIRE(db.execute("SELECT use -1") == "ERR_NOT_FOUND");
+    // Раньше DELETE с условием «age = 5 AND id = 1» удалял id 1, не глядя на age.
+    REQUIRE(db.execute("DELETE FROM use WHERE age = 5 AND id = 1").rfind("ERR_SQL_PARSER", 0) == 0);
+    REQUIRE(db.execute("SELECT use 1") == R"({"name":"Ivan","age":21,"is_active":true})");
+}

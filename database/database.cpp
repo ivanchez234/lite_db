@@ -22,7 +22,9 @@ std::string to_response(WriteResult result) {
         case WriteResult::table_not_found: return "ERR_TABLE_NOT_FOUND";
         case WriteResult::id_exists:       return "ERR_ID_EXISTS";
         case WriteResult::not_found:       return "ERR_NOT_FOUND";
+        case WriteResult::invalid_json:    return "ERR_INVALID_JSON";
         case WriteResult::invalid_data:    return "ERR_CONSTRAINT_VIOLATION";
+        case WriteResult::read_error:      return "ERR_READ_FAILED";
         // Клиент не должен получить OK за операцию, которой нет в журнале:
         // после аварии она бы молча исчезла.
         case WriteResult::log_failed:      return "ERR_WAL_WRITE_FAILED";
@@ -268,7 +270,8 @@ std::string Database::execute(const std::string& raw_query) {
         // Разделяемо: записи в разные таблицы не ждут друг друга.
         std::shared_lock<std::shared_mutex> lock(checkpoint_mutex);
 
-        const WriteMode mode = (cmd == "INSERT") ? WriteMode::insert : WriteMode::upsert;
+        // UPDATE — как в SQL: меняет только переданные поля существующей записи.
+        const WriteMode mode = (cmd == "INSERT") ? WriteMode::insert : WriteMode::update;
         return to_response(storage.insert(table_name, id, body, mode, log));
     }
 

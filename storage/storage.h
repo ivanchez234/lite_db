@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <zlib.h>
 
+#include "json.h"
+
 namespace fs = std::filesystem;
 
 // Поддерживаемые типы данных
@@ -75,13 +77,16 @@ enum class WriteResult {
     table_not_found,
     id_exists,       // INSERT для занятого id
     not_found,       // DELETE для несуществующего id
+    invalid_json,    // тело записи — не корректный JSON-объект
     invalid_data,    // запись не прошла проверку типов по схеме
-    log_failed       // журнал не смог сохранить операцию — она не применена
+    log_failed,      // журнал не смог сохранить операцию — она не применена
+    read_error       // текущую версию записи не удалось прочитать с диска
 };
 
 enum class WriteMode {
     insert,   // занятый id — ошибка
-    upsert    // занятый id — новая версия записи (так работает UPDATE)
+    update,   // как UPDATE в SQL: меняет переданные поля существующей записи
+    upsert    // запись целиком: новая или новая версия существующей
 };
 
 // Вызывается под замком таблицы после проверки данных, но до их применения.
@@ -111,15 +116,19 @@ private:
     // Таблица дальше защищается своим собственным замком.
     Table* lookup_table(const std::string& name);
 
-    std::map<std::string, std::string> parse_json_manual(std::string s);
+    // Поля записи по имени. std::map — чтобы порядок полей в записи
+    // не зависел от порядка в присланном JSON.
+    using FieldMap = std::map<std::string, lite_db::json::Value>;
+
     uint32_t hash_string(const std::string& s);
-    // false — данные не соответствуют схеме таблицы.
-    bool pack_json(const std::string& json_str, Table* t, std::vector<char>& out);
+    // Проверяет поля по схеме таблицы (типы, набор колонок) и приводит
+    // BOOL к true/false. false — данные не соответствуют схеме.
+    bool validate_fields(Table* t, FieldMap& fields);
+    std::vector<char> pack_fields(const FieldMap& fields);
 
     // Новые методы для работы с метаданными
     void save_schema(Table* t);
     void load_schema(Table* t);
-    bool validate_types(Table* t, const std::map<std::string, std::string>& data);
 
     void load_table_index(Table* t);
 
@@ -148,7 +157,13 @@ private:
     std::vector<char> pack_columns(Table* t);
     std::vector<char> unpack_columns(const std::vector<char>& columnar_buffer, Table* t);
 
-    // Все три вызываются с захваченным эксклюзивно t->mtx.
+    enum class Lookup { found, missing, read_error };
+
+    // Последняя версия записи (буфер, затем диск). Вызывается с захваченным
+    // t->mtx — хотя бы разделяемо.
+    Lookup find_latest_locked(Table* t, int id, std::vector<char>& payload);
+
+    // Вызываются с захваченным эксклюзивно t->mtx.
     bool exists_locked(Table* t, int id);
     void insert_to_block(Table* t, const std::vector<char>& raw_record);
     // false — блок записать не удалось; буфер и индекс при этом не меняются.

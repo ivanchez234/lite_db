@@ -13,6 +13,8 @@ add_executable(lite_db_tests
     test_concurrency.cpp
     test_database.cpp
     test_server.cpp
+    test_json.cpp
+    test_sql_parser.cpp
 )
 
 target_link_libraries(lite_db_tests PRIVATE lite_db_core Catch2::Catch2WithMain)
