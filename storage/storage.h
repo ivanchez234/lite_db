@@ -4,6 +4,7 @@
 #include <map>
 #include <vector>
 #include <mutex>
+#include <shared_mutex>
 #include <fstream>
 #include <filesystem>
 #include <zlib.h>
@@ -49,7 +50,11 @@ struct Table {
     int current_seg_id = 0;
     std::vector<Column> schema; // Тот самый бинарный паспорт в памяти
     std::unordered_map<int, FileLocation> index;
-    std::mutex mtx;
+
+    // Разделяемый: чтения идут параллельно, запись — эксклюзивно.
+    // Гарантий справедливости стандарт не даёт, поэтому поток читателей
+    // теоретически может надолго отодвинуть писателя.
+    std::shared_mutex mtx;
     // Блочное сжатие
     std::vector<char> write_buffer; 
     const size_t BLOCK_SIZE = 4096; // 4 КБ — стандартный размер блока
@@ -58,9 +63,15 @@ struct Table {
 class Storage {
 private:
     std::string root_path = "data/";
+    // Потолок на размер блока. Размеры читаются из заголовка в файле, и
+    // повреждённое значение не должно приводить к выделению гигабайтов.
+    static constexpr uint32_t MAX_BLOCK_SIZE = 64u * 1024u * 1024u;
     const size_t MAX_SEG_SIZE = 10 * 1024 * 1024;
     std::unordered_map<std::string, Table*> tables;
-    std::mutex tables_mtx;  
+    std::shared_mutex tables_mtx;
+
+    // Поиск таблицы без изменения карты. Вызывается с захваченным tables_mtx.
+    Table* find_table(const std::string& name);
 
     std::map<std::string, std::string> parse_json_manual(std::string s);
     uint32_t hash_string(const std::string& s);
@@ -77,10 +88,11 @@ private:
     bool read_block(std::ifstream& in, Table* t, std::vector<char>& row_out);
 
     // Чтение одного поля записи по имени, без разбора записи целиком.
-    bool extract_field(const char* data_ptr, const std::string& key, std::string& out);
+    bool extract_field(const char* data_ptr, size_t payload_size,
+                       const std::string& key, std::string& out);
 
     // Сборка JSON записи из значений полей по схеме таблицы.
-    std::string rebuild_json(const char* data_ptr, Table* t);
+    std::string rebuild_json(const char* data_ptr, size_t payload_size, Table* t);
 
     // Вырезает поле из записи и возвращает его значение через value.
     std::vector<char> strip_field(const char* payload, size_t payload_size,
@@ -103,7 +115,8 @@ public:
 
     bool create_table(const std::string& name);
     bool set_schema(const std::string& table_name, const std::vector<Column>& columns);
-    void insert(const std::string& table_name, int id, const std::string& json_str);
+    // false означает, что таблицы нет: молчаливый отказ выглядел бы как успех.
+    bool insert(const std::string& table_name, int id, const std::string& json_str);
     std::string select(const std::string& table_name, int id, const std::string& target_key = "");
     std::string select_all(const std::string& table_name);
     void remove(const std::string& table_name, int id);

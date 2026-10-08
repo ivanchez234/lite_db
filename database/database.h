@@ -1,21 +1,22 @@
 #pragma once
 #include <string>
-#include <mutex> // <--- ПОДКЛЮЧАЕМ ДЛЯ УМНЫХ БЛОКИРОВОК
+#include <mutex>
+#include <shared_mutex>
 #include "../storage/storage.h"
+#include "wal.h"
 
 
 class Database {
 private:
     Storage storage;
     
-    // --- НАШ ЗАМОК ---
-    // shared_mutex позволяет множественное чтение, но только одиночную запись
-    std::mutex db_mutex; 
+    // Разделяемый замок: чтения идут параллельно, запись — эксклюзивно.
+    std::shared_mutex db_mutex;
 
-    // --- НАШ ФАЙЛ ЛОГОВ ---
-    std::ofstream wal_file; // Теперь файл живет вместе с базой
-    // --- НОВЫЕ ПОЛЯ ДЛЯ WAL ---
-    bool is_recovering = false; 
+    // --- ЖУРНАЛ ПРЕДЗАПИСИ ---
+    Wal wal;
+    bool is_recovering = false;
+
     void append_to_wal(const std::string& query);
     void clear_wal();
 public:

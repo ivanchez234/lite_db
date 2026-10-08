@@ -22,6 +22,9 @@ namespace SQLParser {
         return tokens;
     }
 
+    // Регулярки объявлены static: компиляция выражения дорогая, а раньше она
+    // происходила заново на каждый запрос. Инициализация локального static
+    // потокобезопасна по стандарту с C++11.
     std::string translate(const std::string& raw_query) {
         // Очищаем запрос от невидимых символов переноса строки (важно для сокетов!)
         std::string query = trim(raw_query); 
@@ -34,7 +37,7 @@ namespace SQLParser {
         try { 
             // 1. ПАРСИМ INSERT
             if (upper_query.find("INSERT INTO") == 0) {
-                std::regex re(R"(INSERT\s+INTO\s+(\w+)\s*\((.*?)\)\s*VALUES\s*\((.*?)\))", std::regex::icase);
+                static const std::regex re(R"(INSERT\s+INTO\s+(\w+)\s*\((.*?)\)\s*VALUES\s*\((.*?)\))", std::regex::icase);
                 std::smatch match;
                 if (std::regex_search(query, match, re)) {
                     std::string table = match[1].str();
@@ -70,8 +73,8 @@ namespace SQLParser {
             // Кусок в sql_parser.cpp
             if (upper_query.find("SELECT") == 0) {
                 // Эта регулярка игнорирует всё лишнее между SELECT и FROM
-                std::regex re_with_id(R"(SELECT\s+.*?\s+FROM\s+(\w+).*?WHERE\s+.*?\bid\s*=\s*(\d+))", std::regex::icase);
-                std::regex re_all(R"(SELECT\s+.*?\s+FROM\s+(\w+))", std::regex::icase);
+                static const std::regex re_with_id(R"(SELECT\s+.*?\s+FROM\s+(\w+).*?WHERE\s+.*?\bid\s*=\s*(\d+))", std::regex::icase);
+                static const std::regex re_all(R"(SELECT\s+.*?\s+FROM\s+(\w+))", std::regex::icase);
                 std::smatch match;
 
                 if (std::regex_search(query, match, re_with_id)) {
@@ -85,7 +88,7 @@ namespace SQLParser {
             // 3. ПАРСИМ DELETE
             if (upper_query.find("DELETE FROM") == 0) {
                 // Теперь регулярка игнорирует алиасы (типа use.id) перед словом id
-                std::regex re(R"(DELETE\s+FROM\s+(\w+).*?WHERE\s+.*?\bid\s*=\s*(\d+))", std::regex::icase);
+                static const std::regex re(R"(DELETE\s+FROM\s+(\w+).*?WHERE\s+.*?\bid\s*=\s*(\d+))", std::regex::icase);
                 std::smatch match;
                 if (std::regex_search(query, match, re)) {
                     return "DELETE " + match[1].str() + " " + match[2].str();
@@ -94,7 +97,7 @@ namespace SQLParser {
 
             // 4. ПАРСИМ UPDATE
             if (upper_query.find("UPDATE") == 0) {
-                std::regex re(R"(UPDATE\s+(\w+)\s+SET\s+(.*?)\s+WHERE\s+id\s*=\s*(\d+))", std::regex::icase);
+                static const std::regex re(R"(UPDATE\s+(\w+)\s+SET\s+(.*?)\s+WHERE\s+id\s*=\s*(\d+))", std::regex::icase);
                 std::smatch match;
                 if (std::regex_search(query, match, re)) {
                     std::string table = match[1].str();

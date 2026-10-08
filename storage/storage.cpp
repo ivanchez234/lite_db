@@ -1,4 +1,7 @@
 #include "storage.h"
+#include "byte_reader.h"
+
+#include <shared_mutex>
 #include <iostream>
 #include <map>
 #include <sstream>
@@ -22,11 +25,49 @@ Storage::Storage() {
 }
 
 Storage::~Storage() {
-    std::lock_guard<std::mutex> lock(tables_mtx);
+    std::unique_lock<std::shared_mutex> lock(tables_mtx);
     for (auto& [name, table] : tables) {
         delete table;
     }
 }
+
+namespace {
+
+// Одна запись в строковом буфере: [uint32 длина][int id][payload].
+struct RecordView {
+    uint32_t    rec_sz       = 0;
+    int         id           = 0;
+    const char* payload      = nullptr;  // nullptr у надгробия
+    std::size_t payload_size = 0;
+};
+
+// Читает запись по смещению offset и сдвигает его на следующую.
+// false означает конец буфера либо повреждённые данные: длина записи взята
+// из самого буфера, и доверять ей без проверки нельзя.
+bool next_record(const char* data, std::size_t size, std::size_t& offset, RecordView& out) {
+    if (offset > size) return false;
+
+    ByteReader r(data + offset, size - offset);
+
+    uint32_t rec_sz = 0;
+    if (!r.read(rec_sz)) return false;
+    if (rec_sz < sizeof(int)) return false;   // не вмещает даже id
+    if (!r.has(rec_sz)) return false;         // запись обрезана
+
+    int id = 0;
+    r.read(id);
+
+    out.rec_sz       = rec_sz;
+    out.id           = id;
+    out.payload_size = rec_sz - sizeof(int);
+    out.payload      = out.payload_size ? data + offset + sizeof(uint32_t) + sizeof(int)
+                                        : nullptr;
+
+    offset += sizeof(uint32_t) + rec_sz;
+    return true;
+}
+
+} // namespace
 
 uint32_t Storage::hash_string(const std::string& s) {
     uint32_t hash = 5381;
@@ -66,10 +107,16 @@ std::vector<char> Storage::strip_field(const char* payload, size_t payload_size,
                                        uint32_t field_hash, std::string& value, bool& found) {
     found = false;
 
+    const std::vector<char> unchanged(payload, payload + payload_size);
+
+    ByteReader reader(payload, payload_size);
+
     BinaryHeader head;
-    memcpy(&head, payload, sizeof(BinaryHeader));
+    if (!reader.read(head)) return unchanged;
 
     const size_t keys_offset = sizeof(BinaryHeader);
+    if (head.keys_count > (payload_size - keys_offset) / sizeof(KeyRecord)) return unchanged;
+
     const size_t body_offset = keys_offset + head.keys_count * sizeof(KeyRecord);
     const size_t body_size = payload_size - body_offset;
 
@@ -81,7 +128,8 @@ std::vector<char> Storage::strip_field(const char* payload, size_t payload_size,
 
     for (uint32_t i = 0; i < head.keys_count; ++i) {
         KeyRecord r;
-        memcpy(&r, payload + keys_offset + i * sizeof(KeyRecord), sizeof(KeyRecord));
+        if (!reader.read(r)) return unchanged;
+        if (r.data_offset > body_size || body_size - r.data_offset < r.data_size) return unchanged;
 
         if (!found && r.key_hash == field_hash) {
             found = true;
@@ -93,7 +141,7 @@ std::vector<char> Storage::strip_field(const char* payload, size_t payload_size,
         kept.push_back(r);
     }
 
-    if (!found) return std::vector<char>(payload, payload + payload_size);
+    if (!found) return unchanged;
 
     for (auto& r : kept) {
         if (r.data_offset > removed_offset) r.data_offset -= removed_size;
@@ -120,10 +168,18 @@ std::vector<char> Storage::strip_field(const char* payload, size_t payload_size,
 // Порядок полей в записи при этом меняется, но поиск идёт по хешу, а не по позиции.
 std::vector<char> Storage::insert_field(const char* payload, size_t payload_size,
                                         uint32_t field_hash, const std::string& value) {
+    if (payload_size < sizeof(BinaryHeader)) {
+        return std::vector<char>(payload, payload + payload_size);
+    }
+
     BinaryHeader head;
     memcpy(&head, payload, sizeof(BinaryHeader));
 
     const size_t keys_offset = sizeof(BinaryHeader);
+    if (head.keys_count > (payload_size - keys_offset) / sizeof(KeyRecord)) {
+        return std::vector<char>(payload, payload + payload_size);
+    }
+
     const size_t body_offset = keys_offset + head.keys_count * sizeof(KeyRecord);
     const size_t body_size = payload_size - body_offset;
 
@@ -169,25 +225,17 @@ std::vector<char> Storage::pack_columns(Table* t) {
     }
 
     size_t offset = 0;
-    while (offset < row_buffer.size()) {
-        uint32_t rec_sz;
-        memcpy(&rec_sz, row_buffer.data() + offset, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
+    RecordView rec;
+    while (next_record(row_buffer.data(), row_buffer.size(), offset, rec)) {
+        ids.push_back(rec.id);
 
-        int id;
-        memcpy(&id, row_buffer.data() + offset, sizeof(int));
-        ids.push_back(id);
-        
-        if (rec_sz > sizeof(int)) {
-            size_t payload_size = rec_sz - sizeof(int);
-            const char* payload_ptr = row_buffer.data() + offset + sizeof(int);
-
+        if (rec.payload_size > 0) {
             if (has_bool) {
                 // Значение уходит в битовую колонку и вырезается из самой записи,
                 // иначе оно лежало бы в блоке дважды.
                 std::string value;
                 bool found = false;
-                std::vector<char> stripped = strip_field(payload_ptr, payload_size,
+                std::vector<char> stripped = strip_field(rec.payload, rec.payload_size,
                                                          bool_hash, value, found);
 
                 bool_column.push_back(
@@ -196,15 +244,12 @@ std::vector<char> Storage::pack_columns(Table* t) {
                 sizes.push_back(static_cast<uint32_t>(sizeof(int) + stripped.size()));
                 payloads.insert(payloads.end(), stripped.begin(), stripped.end());
             } else {
-                sizes.push_back(rec_sz);
-                payloads.insert(payloads.end(), payload_ptr, payload_ptr + payload_size);
+                sizes.push_back(rec.rec_sz);
+                payloads.insert(payloads.end(), rec.payload, rec.payload + rec.payload_size);
             }
-
-            offset += sizeof(int) + payload_size;
         } else {
-            sizes.push_back(rec_sz);
-            offset += sizeof(int); // Надгробие
-            if (has_bool) bool_column.push_back(0); // Заглушка для удаленной записи
+            sizes.push_back(rec.rec_sz);   // Надгробие
+            if (has_bool) bool_column.push_back(0);
         }
     }
 
@@ -252,50 +297,65 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
     if (columnar_buffer.empty()) return {};
 
     std::vector<char> row_buffer;
-    
-    uint32_t count;
-    size_t col_offset = 0;
-    memcpy(&count, columnar_buffer.data() + col_offset, sizeof(uint32_t));
-    col_offset += sizeof(uint32_t);
 
-    const uint32_t* sizes_ptr = reinterpret_cast<const uint32_t*>(columnar_buffer.data() + col_offset);
-    col_offset += count * sizeof(uint32_t);
+    ByteReader reader(columnar_buffer.data(), columnar_buffer.size());
 
-    const int* delta_ids_ptr = reinterpret_cast<const int*>(columnar_buffer.data() + col_offset);
-    col_offset += count * sizeof(int);
+    uint32_t count = 0;
+    if (!reader.read(count)) return {};
+
+    // count прочитан из блока. Сначала убеждаемся, что столько колонок вообще
+    // помещается в оставшиеся байты, и только потом умножаем на размер элемента.
+    if (count > reader.remaining() / (sizeof(uint32_t) + sizeof(int))) return {};
+
+    const char* sizes_raw = reader.take(count * sizeof(uint32_t));
+    if (!sizes_raw) return {};
+    const char* deltas_raw = reader.take(count * sizeof(int));
+    if (!deltas_raw) return {};
+
+    // Копируем, а не читаем через reinterpret_cast: смещение в блоке
+    // произвольное, и приведение указателя дало бы невыровненный доступ.
+    std::vector<uint32_t> sizes(count);
+    std::vector<int> deltas(count);
+    if (count > 0) {
+        memcpy(sizes.data(), sizes_raw, count * sizeof(uint32_t));
+        memcpy(deltas.data(), deltas_raw, count * sizeof(int));
+    }
 
     // ==========================================
     // 1. ВОССТАНОВЛЕНИЕ ID ИЗ ДЕЛЬТ
     // ==========================================
     std::vector<int> restored_ids(count);
     if (count > 0) {
-        restored_ids[0] = delta_ids_ptr[0];
+        restored_ids[0] = deltas[0];
         for (uint32_t i = 1; i < count; ++i) {
-            restored_ids[i] = restored_ids[i - 1] + delta_ids_ptr[i]; 
+            restored_ids[i] = restored_ids[i - 1] + deltas[i];
         }
     }
 
     // ==========================================
     // 2. РАСПАКОВКА BOOL-КОЛОНКИ
     // ==========================================
-    char bool_flag = columnar_buffer[col_offset];
-    col_offset += 1;
-    
+    char bool_flag = 0;
+    if (!reader.read(bool_flag)) return {};
+
     std::vector<char> unpacked_bools;
     if (bool_flag == 1) {
-        uint32_t packed_bool_size;
-        memcpy(&packed_bool_size, columnar_buffer.data() + col_offset, sizeof(uint32_t));
-        col_offset += sizeof(uint32_t);
-        
-        std::vector<char> packed_bools(columnar_buffer.data() + col_offset, columnar_buffer.data() + col_offset + packed_bool_size);
-        col_offset += packed_bool_size;
-        
-        // Разжимаем 1 байт обратно в 8 отдельных bool-значений
-        unpacked_bools = unpack_bools(packed_bools, count);
+        uint32_t packed_bool_size = 0;
+        if (!reader.read(packed_bool_size)) return {};
+
+        const char* packed_raw = reader.take(packed_bool_size);
+        if (!packed_raw) return {};
+
+        // Битовая колонка обязана покрывать все записи блока.
+        if (packed_bool_size < (count + 7) / 8) return {};
+
+        unpacked_bools = unpack_bools(
+            std::vector<char>(packed_raw, packed_raw + packed_bool_size), count);
     }
 
     // 3. Чтение оставшихся данных (payloads)
-    const char* payloads_ptr = columnar_buffer.data() + col_offset;
+    const char* payloads_ptr = columnar_buffer.data() + reader.offset();
+    const size_t payloads_size = reader.remaining();
     size_t payload_offset = 0;
 
     // Хеш bool-колонки берём из схемы: в блоке он не хранится.
@@ -313,11 +373,16 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
     // 4. СБОРКА СТРОК (Row-based format)
     // ==========================================
     for (uint32_t i = 0; i < count; ++i) {
-        uint32_t stored_sz = sizes_ptr[i];
+        uint32_t stored_sz = sizes[i];
         int id = restored_ids[i];
 
         if (stored_sz > sizeof(int)) {
             size_t payload_size = stored_sz - sizeof(int);
+
+            // Длина записи взята из блока: она должна укладываться в то,
+            // что от блока осталось.
+            if (payloads_size - payload_offset < payload_size) break;
+
             const char* payload_ptr = payloads_ptr + payload_offset;
 
             std::vector<char> restored;
@@ -353,6 +418,10 @@ bool Storage::read_block(std::ifstream& in, Table* t, std::vector<char>& row_out
     CompressedBlockHeader header;
     if (!in.read(reinterpret_cast<char*>(&header), sizeof(header))) return false;
 
+    // Размеры пришли из файла: проверяем до того, как выделять по ним память.
+    if (header.compressed_size == 0 || header.original_size == 0) return false;
+    if (header.compressed_size > MAX_BLOCK_SIZE || header.original_size > MAX_BLOCK_SIZE) return false;
+
     std::vector<char> comp(header.compressed_size);
     if (!in.read(comp.data(), header.compressed_size)) return false;
 
@@ -373,21 +442,34 @@ bool Storage::read_block(std::ifstream& in, Table* t, std::vector<char>& row_out
 
 // Достаёт значение одного поля, не разбирая запись целиком: ищет хеш имени
 // в таблице ключей и читает ровно нужные байты по смещению.
-bool Storage::extract_field(const char* data_ptr, const std::string& key, std::string& out) {
+bool Storage::extract_field(const char* data_ptr, size_t payload_size,
+                            const std::string& key, std::string& out) {
+    ByteReader reader(data_ptr, payload_size);
+
     BinaryHeader head;
-    memcpy(&head, data_ptr, sizeof(BinaryHeader));
+    if (!reader.read(head)) return false;
+
+    // keys_count прочитан из записи: он не должен описывать больше ключей,
+    // чем помещается в оставшиеся байты.
+    const size_t keys_offset = sizeof(BinaryHeader);
+    if (head.keys_count > (payload_size - keys_offset) / sizeof(KeyRecord)) return false;
+
+    const size_t body_offset = keys_offset + head.keys_count * sizeof(KeyRecord);
+    const size_t body_size = payload_size - body_offset;
 
     const uint32_t h = hash_string(key);
-    const size_t keys_offset = sizeof(BinaryHeader);
-    const size_t body_offset = keys_offset + head.keys_count * sizeof(KeyRecord);
 
     for (uint32_t i = 0; i < head.keys_count; ++i) {
         KeyRecord r;
-        memcpy(&r, data_ptr + keys_offset + i * sizeof(KeyRecord), sizeof(KeyRecord));
-        if (r.key_hash == h) {
-            out.assign(data_ptr + body_offset + r.data_offset, r.data_size);
-            return true;
-        }
+        if (!reader.read(r)) return false;
+        if (r.key_hash != h) continue;
+
+        // Смещение и длина значения тоже из записи.
+        if (r.data_offset > body_size) return false;
+        if (body_size - r.data_offset < r.data_size) return false;
+
+        out.assign(data_ptr + body_offset + r.data_offset, r.data_size);
+        return true;
     }
     return false;
 }
@@ -397,7 +479,7 @@ bool Storage::extract_field(const char* data_ptr, const std::string& key, std::s
 // __full__, то есть все значения хранились на диске дважды.
 // Пустая строка означает, что у таблицы нет схемы: без неё имена полей
 // восстановить нельзя, в записи лежат только их хеши.
-std::string Storage::rebuild_json(const char* data_ptr, Table* t) {
+std::string Storage::rebuild_json(const char* data_ptr, size_t payload_size, Table* t) {
     if (t->schema.empty()) return "";
 
     std::string out = "{";
@@ -405,7 +487,7 @@ std::string Storage::rebuild_json(const char* data_ptr, Table* t) {
 
     for (const auto& col : t->schema) {
         std::string val;
-        if (!extract_field(data_ptr, col.name, val)) continue;
+        if (!extract_field(data_ptr, payload_size, col.name, val)) continue;
 
         if (!first) out += ",";
         first = false;
@@ -484,23 +566,23 @@ void Storage::flush_block_to_disk(Table* t) {
 
     // 4. ОБНОВЛЕНИЕ ИНДЕКСА
     size_t offset = 0;
-    while (offset < t->write_buffer.size()) {
-        uint32_t rec_sz;
-        memcpy(&rec_sz, t->write_buffer.data() + offset, sizeof(uint32_t));
-        int id;
-        memcpy(&id, t->write_buffer.data() + offset + sizeof(uint32_t), sizeof(int));
-        
-        if (rec_sz == sizeof(int)) {
-            t->index.erase(id); // Удаляем из индекса, если надгробие
+    RecordView rec;
+    while (next_record(t->write_buffer.data(), t->write_buffer.size(), offset, rec)) {
+        if (rec.payload_size == 0) {
+            t->index.erase(rec.id); // Удаляем из индекса, если надгробие
         } else {
             // Пишем актуальный путь (path) и смещение
-            t->index[id] = { path, static_cast<size_t>(block_start) };
+            t->index[rec.id] = { path, static_cast<size_t>(block_start) };
         }
-        offset += sizeof(uint32_t) + rec_sz;
     }
 
     file.close();
     t->write_buffer.clear(); 
+}
+
+Table* Storage::find_table(const std::string& name) {
+    const auto it = tables.find(name);
+    return it == tables.end() ? nullptr : it->second;
 }
 
 std::map<std::string, std::string> Storage::parse_json_manual(std::string s) {
@@ -593,7 +675,7 @@ std::vector<char> Storage::pack_json(const std::string& json_str, Table* t) {
 }
 
 bool Storage::create_table(const std::string& name) {
-    std::lock_guard<std::mutex> lock(tables_mtx);
+    std::unique_lock<std::shared_mutex> lock(tables_mtx);
     if (tables.count(name)) return false;
 
     std::string t_path = root_path + name + "/";
@@ -610,9 +692,9 @@ bool Storage::create_table(const std::string& name) {
 }
 
 bool Storage::set_schema(const std::string& table_name, const std::vector<Column>& columns) {
-    std::lock_guard<std::mutex> lock(tables_mtx);
-    if (!tables.count(table_name)) return false;
-    Table* t = tables[table_name];
+    std::unique_lock<std::shared_mutex> lock(tables_mtx);
+    Table* t = find_table(table_name);
+    if (!t) return false;
     t->schema = columns;
     save_schema(t); 
     return true;
@@ -650,14 +732,14 @@ void Storage::load_schema(Table* t) {
     }
 }
 
-void Storage::insert(const std::string& table_name, int id, const std::string& json_str) {
+bool Storage::insert(const std::string& table_name, int id, const std::string& json_str) {
     Table* t = nullptr;
     {
-        std::lock_guard<std::mutex> lock(tables_mtx);
-        if (!tables.count(table_name)) return;
-        t = tables[table_name];
+        std::shared_lock<std::shared_mutex> lock(tables_mtx);
+        t = find_table(table_name);
+        if (!t) return false;
     }
-    std::lock_guard<std::mutex> t_lock(t->mtx);
+    std::unique_lock<std::shared_mutex> t_lock(t->mtx);
     
     std::vector<char> bin = pack_json(json_str, t);
     std::vector<char> full_record;
@@ -665,24 +747,26 @@ void Storage::insert(const std::string& table_name, int id, const std::string& j
     full_record.insert(full_record.end(), bin.begin(), bin.end());
 
     insert_to_block(t, full_record);
+    return true;
 }
 
 std::string Storage::select(const std::string& table_name, int id, const std::string& target_key) {
     Table* t = nullptr;
     {
-        std::lock_guard<std::mutex> lock(tables_mtx);
-        if (!tables.count(table_name)) return "ERR_TABLE_NOT_FOUND";
-        t = tables[table_name];
+        std::shared_lock<std::shared_mutex> lock(tables_mtx);
+        t = find_table(table_name);
+        if (!t) return "ERR_TABLE_NOT_FOUND";
     }
-    std::lock_guard<std::mutex> t_lock(t->mtx);
+    // Чтение: несколько запросов к одной таблице идут одновременно.
+    std::shared_lock<std::shared_mutex> t_lock(t->mtx);
     
-    auto extract = [&](char* data_ptr) -> std::string {
+    auto extract = [&](const char* data_ptr, size_t payload_size) -> std::string {
         if (!target_key.empty()) {
             std::string val;
-            if (!extract_field(data_ptr, target_key, val)) return "ERR_KEY_NOT_FOUND";
+            if (!extract_field(data_ptr, payload_size, target_key, val)) return "ERR_KEY_NOT_FOUND";
             return val;
         }
-        std::string json = rebuild_json(data_ptr, t);
+        std::string json = rebuild_json(data_ptr, payload_size, t);
         return json.empty() ? "ERR_NO_SCHEMA" : json;
     };
 
@@ -691,23 +775,18 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
     bool found_in_buffer = false;
     std::string latest_buffer_result = "ERR_NOT_FOUND";
     size_t buf_off = 0;
-    
-    while (buf_off < t->write_buffer.size()) {
-        uint32_t rec_sz;
-        memcpy(&rec_sz, t->write_buffer.data() + buf_off, sizeof(uint32_t));
-        int rid;
-        memcpy(&rid, t->write_buffer.data() + buf_off + sizeof(uint32_t), sizeof(int));
-        
-        if (rid == id) {
+    RecordView rec;
+
+    while (next_record(t->write_buffer.data(), t->write_buffer.size(), buf_off, rec)) {
+        if (rec.id == id) {
             found_in_buffer = true;
-            if (rec_sz == sizeof(int)) {
+            if (rec.payload_size == 0) {
                 latest_buffer_result = "ERR_NOT_FOUND"; // Нашли надгробие!
             } else {
-                latest_buffer_result = extract(t->write_buffer.data() + buf_off + sizeof(uint32_t) + sizeof(int));
+                latest_buffer_result = extract(rec.payload, rec.payload_size);
             }
             // НЕ ДЕЛАЕМ return. Продолжаем искать более свежие версии!
         }
-        buf_off += sizeof(uint32_t) + rec_sz;
     }
 
     if (found_in_buffer) {
@@ -715,8 +794,11 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
     }
 
     // 2. ИЩЕМ НА ДИСКЕ В ИНДЕКСЕ
-    if (t->index.find(id) == t->index.end()) return "ERR_NOT_FOUND";
-    FileLocation loc = t->index[id];
+    // Именно find, а не operator[]: тот не const и под разделяемым замком
+    // стал бы изменением карты из нескольких потоков сразу.
+    const auto index_it = t->index.find(id);
+    if (index_it == t->index.end()) return "ERR_NOT_FOUND";
+    const FileLocation loc = index_it->second;
 
     std::ifstream in(loc.filename, std::ios::binary);
     in.seekg(loc.offset);
@@ -753,22 +835,17 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
     bool found_in_block = false;
     std::string latest_block_result = "ERR_NOT_FOUND";
     size_t offset = 0;
-    
-    while (offset < row_orig.size()) {
-        uint32_t rec_sz;
-        memcpy(&rec_sz, row_orig.data() + offset, sizeof(uint32_t));
-        int rid;
-        memcpy(&rid, row_orig.data() + offset + sizeof(uint32_t), sizeof(int));
+    RecordView block_rec;
 
-        if (rid == id) {
+    while (next_record(row_orig.data(), row_orig.size(), offset, block_rec)) {
+        if (block_rec.id == id) {
             found_in_block = true;
-            if (rec_sz == sizeof(int)) {
+            if (block_rec.payload_size == 0) {
                 latest_block_result = "ERR_NOT_FOUND"; // Нашли надгробие в блоке!
             } else {
-                latest_block_result = extract(row_orig.data() + offset + sizeof(uint32_t) + sizeof(int));
+                latest_block_result = extract(block_rec.payload, block_rec.payload_size);
             }
         }
-        offset += sizeof(uint32_t) + rec_sz;
     }
     
     if (found_in_block) {
@@ -780,16 +857,16 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
 std::string Storage::select_all(const std::string& table_name) {
     Table* t = nullptr;
     {
-        std::lock_guard<std::mutex> lock(tables_mtx);
-        if (!tables.count(table_name)) return "ERR_TABLE_NOT_FOUND";
-        t = tables[table_name];
+        std::shared_lock<std::shared_mutex> lock(tables_mtx);
+        t = find_table(table_name);
+        if (!t) return "ERR_TABLE_NOT_FOUND";
     }
-    std::lock_guard<std::mutex> t_lock(t->mtx);
+    std::shared_lock<std::shared_mutex> t_lock(t->mtx);
     
     std::map<int, std::string> latest_data;
 
-    auto extract = [&](char* data_ptr) -> std::string {
-        std::string json = rebuild_json(data_ptr, t);
+    auto extract = [&](const char* data_ptr, size_t payload_size) -> std::string {
+        std::string json = rebuild_json(data_ptr, payload_size, t);
         return json.empty() ? "{}" : json;
     };
 
@@ -801,36 +878,26 @@ std::string Storage::select_all(const std::string& table_name) {
             if (!read_block(in, t, rows)) break;
 
             size_t offset = 0;
-            while (offset < rows.size()) {
-                uint32_t rec_sz;
-                memcpy(&rec_sz, rows.data() + offset, sizeof(uint32_t));
-                int id;
-                memcpy(&id, rows.data() + offset + sizeof(uint32_t), sizeof(int));
-                
-                if (rec_sz == sizeof(int)) {
-                    latest_data.erase(id);
+            RecordView rec;
+            while (next_record(rows.data(), rows.size(), offset, rec)) {
+                if (rec.payload_size == 0) {
+                    latest_data.erase(rec.id);
                 } else {
-                    latest_data[id] = extract(rows.data() + offset + sizeof(uint32_t) + sizeof(int));
+                    latest_data[rec.id] = extract(rec.payload, rec.payload_size);
                 }
-                offset += sizeof(uint32_t) + rec_sz;
             }
         }
         sid++;
     }
 
     size_t buf_off = 0;
-    while (buf_off < t->write_buffer.size()) {
-        uint32_t rec_sz;
-        memcpy(&rec_sz, t->write_buffer.data() + buf_off, sizeof(uint32_t));
-        int id;
-        memcpy(&id, t->write_buffer.data() + buf_off + sizeof(uint32_t), sizeof(int));
-        
-        if (rec_sz == sizeof(int)) {
-            latest_data.erase(id); 
+    RecordView buf_rec;
+    while (next_record(t->write_buffer.data(), t->write_buffer.size(), buf_off, buf_rec)) {
+        if (buf_rec.payload_size == 0) {
+            latest_data.erase(buf_rec.id);
         } else {
-            latest_data[id] = extract(t->write_buffer.data() + buf_off + sizeof(uint32_t) + sizeof(int));
+            latest_data[buf_rec.id] = extract(buf_rec.payload, buf_rec.payload_size);
         }
-        buf_off += sizeof(uint32_t) + rec_sz;
     }
 
     if (latest_data.empty()) return "[]";
@@ -857,20 +924,15 @@ void Storage::load_table_index(Table* t) {
 
             std::vector<char> rows;
             if (!read_block(in, t, rows)) break;
-            
+
             size_t offset = 0;
-            while (offset < rows.size()) {
-                uint32_t rec_sz;
-                memcpy(&rec_sz, rows.data() + offset, sizeof(uint32_t));
-                int id;
-                memcpy(&id, rows.data() + offset + sizeof(uint32_t), sizeof(int));
-                
-                if (rec_sz == sizeof(int)) {
-                    t->index.erase(id);
+            RecordView rec;
+            while (next_record(rows.data(), rows.size(), offset, rec)) {
+                if (rec.payload_size == 0) {
+                    t->index.erase(rec.id);
                 } else {
-                    t->index[id] = { fn, block_start };
+                    t->index[rec.id] = { fn, block_start };
                 }
-                offset += sizeof(uint32_t) + rec_sz;
             }
         }
         sid++;
@@ -879,26 +941,21 @@ void Storage::load_table_index(Table* t) {
 }
 
 bool Storage::exists(const std::string& table_name, int id) {
-    std::lock_guard<std::mutex> lock(tables_mtx);
-    if (!tables.count(table_name)) return false;
-    Table* t = tables[table_name];
-    std::lock_guard<std::mutex> t_lock(t->mtx);
+    std::shared_lock<std::shared_mutex> lock(tables_mtx);
+    Table* t = find_table(table_name);
+    if (!t) return false;
+    std::shared_lock<std::shared_mutex> t_lock(t->mtx);
 
     size_t buf_off = 0;
     bool found_in_buf = false;
     bool is_deleted = false;
-    
-    while (buf_off < t->write_buffer.size()) {
-        uint32_t rec_sz;
-        memcpy(&rec_sz, t->write_buffer.data() + buf_off, sizeof(uint32_t));
-        int rid;
-        memcpy(&rid, t->write_buffer.data() + buf_off + sizeof(uint32_t), sizeof(int));
-        
-        if (rid == id) {
+    RecordView rec;
+
+    while (next_record(t->write_buffer.data(), t->write_buffer.size(), buf_off, rec)) {
+        if (rec.id == id) {
             found_in_buf = true;
-            is_deleted = (rec_sz == sizeof(int)); 
+            is_deleted = (rec.payload_size == 0);
         }
-        buf_off += sizeof(uint32_t) + rec_sz;
     }
 
     if (found_in_buf) return !is_deleted;
@@ -906,10 +963,10 @@ bool Storage::exists(const std::string& table_name, int id) {
 }
 
 void Storage::remove(const std::string& table_name, int id) {
-    std::lock_guard<std::mutex> lock(tables_mtx);
-    if (!tables.count(table_name)) return;
-    Table* t = tables[table_name];
-    std::lock_guard<std::mutex> t_lock(t->mtx);
+    std::shared_lock<std::shared_mutex> lock(tables_mtx);
+    Table* t = find_table(table_name);
+    if (!t) return;
+    std::unique_lock<std::shared_mutex> t_lock(t->mtx);
 
     t->index.erase(id); 
 

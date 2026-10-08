@@ -34,6 +34,13 @@ add_executable(server_app ${SERVER_SOURCES})
 
 target_link_libraries(server_app ws2_32 z)
 
+# --- ТЕСТЫ ---
+option(LITE_DB_BUILD_TESTS "Build unit tests" ON)
+if(LITE_DB_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
 # --- СБОРКА КЛИЕНТА ---
 add_executable(client_app client.cpp)
 target_link_libraries(client_app ws2_32)

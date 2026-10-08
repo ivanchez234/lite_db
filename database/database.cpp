@@ -14,12 +14,11 @@ std::string trim_cmd(const std::string& s) {
     return s.substr(first, (last - first + 1));
 }
 
-Database::Database(const std::string& dummy) {
-    // В новой архитектуре Storage сам управляет папкой data/
-    // Параметр конструктора можно оставить для совместимости
-    // Открываем WAL-файл ОДИН РАЗ при старте сервера
-    wal_file.open("wal.log", std::ios::app);
-    if (!wal_file.is_open()) {
+// Параметр не используется: Storage сам управляет папкой data/.
+// Оставлен, чтобы не менять вызов в main.cpp.
+Database::Database(const std::string&)
+    : wal("wal.log") {
+    if (!wal.is_open()) {
         std::cerr << "WARNING: Could not open wal.log for writing!" << std::endl;
     }
 }
@@ -28,56 +27,37 @@ Database::~Database() {
     for (auto& pair : storage.get_all_tables()) { 
         storage.flush_block_to_disk(pair.second); 
     }
-    clear_wal(); // Данные надежно на диске, черновик можно сжечь!
-    if (wal_file.is_open()) {
-        wal_file.flush();
-        wal_file.close();
-    }
+    clear_wal(); // Данные надёжно на диске, черновик можно сжечь
 }
 
 // --- РЕАЛИЗАЦИЯ WAL ---
 
 void Database::append_to_wal(const std::string& query) {
-    if (is_recovering) return; 
-    
-    if (wal_file.is_open()) {
-        wal_file << query << "\n";
-        
-        // ВАЖНО: Мы УБРАЛИ wal.flush() отсюда!
-        // Теперь запись идет в буфер ОС, что работает в 1000 раз быстрее.
-        // Файл физически обновится либо когда буфер заполнится, либо по команде FLUSH.
-    }
+    // Во время восстановления журнал не дописываем: мы его как раз читаем.
+    if (is_recovering) return;
+    wal.append(query);
 }
 
 void Database::clear_wal() {
-    // Открытие с флагом trunc мгновенно стирает содержимое файла
-    std::ofstream wal("wal.log", std::ios::trunc); 
+    wal.reset();
 }
 
 void Database::recover_from_wal() {
-    std::ifstream wal("wal.log");
-    if (!wal.is_open()) return; // Лога нет, значит всё закрылось штатно
+    const std::vector<std::string> records = wal.replay();
+    if (records.empty()) return; // Журнал пуст — значит всё закрылось штатно
 
-    // Проверяем, не пустой ли файл
-    wal.seekg(0, std::ios::end);
-    if (wal.tellg() == 0) return;
-    wal.seekg(0, std::ios::beg);
-
-    std::cout << "\n[WAL] Crash detected! Found uncommitted operations." << std::endl;
+    std::cout << "\n[WAL] Crash detected! Found " << records.size()
+              << " uncommitted operations." << std::endl;
     std::cout << "[WAL] Replaying log to restore Write Buffer..." << std::endl;
-    
-    is_recovering = true; // Включаем режим восстановления
-    std::string line;
-    int count = 0;
-    
-    while (std::getline(wal, line)) {
-        if (line.empty()) continue;
-        execute(line); // "Скармливаем" команду базе, будто её прислал клиент!
-        count++;
+
+    is_recovering = true;
+    for (const std::string& query : records) {
+        execute(query); // Скармливаем команду базе, будто её прислал клиент
     }
-    
-    is_recovering = false; // Выключаем режим
-    std::cout << "[WAL] Successfully recovered " << count << " operations!\n" << std::endl;
+    is_recovering = false;
+
+    std::cout << "[WAL] Successfully recovered " << records.size()
+              << " operations!\n" << std::endl;
 }
 
 void Database::load_config(const std::string& filename) {
@@ -97,6 +77,21 @@ void Database::load_config(const std::string& filename) {
 
         // 1. Проверяем отступ (количество пробелов в начале)
         size_t indent = line.find_first_not_of(' ');
+
+        // Глобальная настройка: насколько надёжно журнал проталкивается на диск.
+        if (indent == 0 && line.find("wal_sync:") != std::string::npos) {
+            const std::string value = trim_cmd(line.substr(line.find(":") + 1));
+            Wal::Sync mode;
+            if (Wal::parse_sync_mode(value, mode)) {
+                wal.set_sync_mode(mode);
+                std::cout << "[Config] WAL sync mode: " << value << std::endl;
+            } else {
+                std::cout << "[Config] Unknown wal_sync '" << value << "', keeping "
+                          << Wal::sync_mode_name(wal.sync_mode()) << std::endl;
+            }
+            in_schema = false;
+            continue;
+        }
 
         // 2. Если нашли "- name:" с МАЛЕНЬКИМ отступом (обычно 2) — это новая ТАБЛИЦА
         if (line.find("- name:") != std::string::npos && indent < 4) {
@@ -156,7 +151,7 @@ std::string Database::execute(const std::string& raw_query) {
 
     // 0. FLUSH - принудительный сброс (ЗАПИСЬ)
     if (cmd == "FLUSH") {
-        std::lock_guard<std::mutex> lock(db_mutex); // Эксклюзивная блокировка
+        std::unique_lock<std::shared_mutex> lock(db_mutex); // Эксклюзивная блокировка
         for (auto& pair : storage.get_all_tables()) {
             storage.flush_block_to_disk(pair.second);
         }
@@ -171,7 +166,7 @@ std::string Database::execute(const std::string& raw_query) {
 
     // 1. CREATE (ЗАПИСЬ)
     if (cmd == "CREATE") {
-        std::lock_guard<std::mutex> lock(db_mutex); // Эксклюзивная блокировка
+        std::unique_lock<std::shared_mutex> lock(db_mutex); // Эксклюзивная блокировка
         if (storage.create_table(table_name)) {
             return "OK: Table '" + table_name + "' created";
         }
@@ -201,7 +196,7 @@ std::string Database::execute(const std::string& raw_query) {
         
         if (cols.empty()) return "ERR_EMPTY_SCHEMA";
         
-        std::lock_guard<std::mutex> lock(db_mutex); // Блокируем только момент применения
+        std::unique_lock<std::shared_mutex> lock(db_mutex); // Блокируем только момент применения
         if (storage.set_schema(table_name, cols)) return "OK: Schema applied";
         return "ERR_TABLE_NOT_FOUND";
     }
@@ -214,8 +209,9 @@ std::string Database::execute(const std::string& raw_query) {
         std::string upper_arg = arg;
         std::transform(upper_arg.begin(), upper_arg.end(), upper_arg.begin(), ::toupper);
 
-        // ВАЖНО: Разрешаем СОВМЕСТНОЕ чтение. 7 ядер могут читать базу одновременно!
-        std::lock_guard<std::mutex> lock(db_mutex); 
+        // Разделяемый замок: несколько SELECT выполняются одновременно,
+        // но ни один не пересечётся с записью.
+        std::shared_lock<std::shared_mutex> lock(db_mutex);
 
         if (upper_arg == "ALL" || upper_arg == "*") {
             return storage.select_all(table_name);
@@ -244,16 +240,18 @@ std::string Database::execute(const std::string& raw_query) {
         if (body.empty()) return "ERR_EMPTY_BODY";
         
         // Эксклюзивная блокировка (Только ОДИН поток может писать в данный момент)
-        std::lock_guard<std::mutex> lock(db_mutex); 
+        std::unique_lock<std::shared_mutex> lock(db_mutex); 
         
         if (cmd == "INSERT" && storage.exists(table_name, id)) {
             return "ERR_ID_EXISTS";
         }
         
         try {
-            storage.insert(table_name, id, body);
-            // Пишем в WAL под тем же замком, чтобы логи не перемешались
-            append_to_wal(query); 
+            // Сначала журнал, потом данные: в этом и состоит предзапись.
+            // Обратный порядок означал бы, что после аварии изменение могло
+            // примениться, не попав в журнал.
+            append_to_wal(query);
+            if (!storage.insert(table_name, id, body)) return "ERR_TABLE_NOT_FOUND";
             return "OK";
         } catch (const std::exception& e) {
             return std::string("ERR: ") + e.what();
@@ -265,11 +263,12 @@ std::string Database::execute(const std::string& raw_query) {
         int id;
         if (!(ss >> id)) return "ERR_INVALID_ID";
         
-        std::lock_guard<std::mutex> lock(db_mutex); // Эксклюзивная блокировка
+        std::unique_lock<std::shared_mutex> lock(db_mutex); // Эксклюзивная блокировка
         
         if (!storage.exists(table_name, id)) return "ERR_NOT_FOUND";
-        storage.remove(table_name, id);
+
         append_to_wal(query);
+        storage.remove(table_name, id);
         return "OK";
     }
 
