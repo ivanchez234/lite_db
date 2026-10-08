@@ -31,6 +31,13 @@ tables:
 
 IS_WINDOWS = os.name == "nt"
 
+# Сообщения теста — по-русски. Когда ctest перехватывает вывод, Python пишет
+# в кодировке системы: на русской Windows это cp1251 и всё работает, а на
+# английской (например, в CI) — cp1252, и первая же кириллица роняет тест
+# с UnicodeEncodeError. Поэтому кодировку вывода задаём явно.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def load_driver(path):
     spec = importlib.util.spec_from_file_location("litedb_driver", path)
@@ -54,7 +61,7 @@ class Server:
         self.log_path = os.path.join(workdir, "server.log")
 
     def start(self):
-        log = open(self.log_path, "a")
+        log = open(self.log_path, "a", encoding="utf-8")
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WINDOWS else 0
         self.proc = subprocess.Popen([self.binary, str(self.port)], cwd=self.workdir,
                                      stdout=log, stderr=subprocess.STDOUT,
@@ -82,7 +89,7 @@ class Server:
         self.proc.wait(timeout=30)
 
     def log(self):
-        with open(self.log_path) as f:
+        with open(self.log_path, encoding="utf-8", errors="replace") as f:
             return f.read()
 
 

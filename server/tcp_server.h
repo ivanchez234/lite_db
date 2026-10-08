@@ -3,6 +3,7 @@
 #include "socket_handle.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
@@ -94,6 +95,7 @@ private:
 
     void readLoop(const std::shared_ptr<Connection>& connection);
     void readCommands(const std::shared_ptr<Connection>& connection);
+    void discardInput(const std::shared_ptr<Connection>& connection);
     bool enqueueRequest(const std::shared_ptr<Connection>& connection, Request request);
 
     void workerThread(int workerId);
@@ -137,6 +139,8 @@ private:
     static constexpr std::size_t kMaxPendingPerConn = 10000;
     // Клиент, шлющий байты без перевода строки, не должен занимать память без предела.
     static constexpr std::size_t kMaxLineBytes      = 1u << 20;
+    // Сколько ждать, пока клиент, получивший ошибку протокола, закроет соединение.
+    static constexpr std::chrono::seconds kDiscardTimeout{10};
 
 #ifdef _WIN32
     bool netInitialised_ = false;

@@ -294,10 +294,37 @@ void TcpServer::readCommands(const std::shared_ptr<Connection>& connection) {
 
         if (partial.size() > kMaxLineBytes) {
             // Ответ об ошибке идёт через общую очередь, чтобы не обогнать
-            // ответы на команды, присланные раньше. Дальше этого клиента не читаем.
+            // ответы на команды, присланные раньше. Команды этого клиента
+            // больше не выполняем.
             (void)enqueueRequest(connection, Request{"ERR_COMMAND_TOO_LONG", true});
+            discardInput(connection);
             return;
         }
+    }
+}
+
+// Дочитывает и выбрасывает всё, что клиент ещё шлёт, пока он не закроет
+// соединение (но не дольше kDiscardTimeout).
+//
+// Зачем не закрыть сокет сразу: если в нём остались непрочитанные данные,
+// система отвечает клиенту не FIN, а RST. А RST на Windows (и иногда на Linux)
+// уничтожает у клиента уже пришедшие, но ещё не прочитанные данные — то есть
+// клиент может так и не увидеть наш ответ с ошибкой.
+void TcpServer::discardInput(const std::shared_ptr<Connection>& connection) {
+    const SOCKET sock = connection->socket.get();
+    const auto deadline = std::chrono::steady_clock::now() + kDiscardTimeout;
+    char sink[4096];
+
+    while (!stopping() && connection->alive.load()
+           && std::chrono::steady_clock::now() < deadline) {
+        const int ready = net::wait_readable(sock, kPollIntervalMs);
+        if (ready == 0) continue;
+        if (ready < 0 && net::interrupted()) continue;
+        if (ready < 0) return;
+
+        const auto received = ::recv(sock, sink, static_cast<int>(sizeof(sink)), 0);
+        if (received == 0) return;                       // клиент закрыл соединение
+        if (received < 0 && !net::interrupted()) return;
     }
 }
 
