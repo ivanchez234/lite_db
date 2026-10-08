@@ -123,7 +123,7 @@ TEST_CASE("reset очищает журнал", "[wal]") {
     REQUIRE(wal.append("INSERT use 1 {\"name\":\"Alex\"}"));
     REQUIRE(wal.replay().size() == 1);
 
-    wal.reset();
+    REQUIRE(wal.reset());
     REQUIRE(wal.replay().empty());
 
     // После очистки журнал остаётся рабочим.

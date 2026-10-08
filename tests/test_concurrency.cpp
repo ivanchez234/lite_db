@@ -42,7 +42,7 @@ TEST_CASE("параллельные чтения возвращают одно �
 
     constexpr int kRecords = 100;
     for (int id = 1; id <= kRecords; ++id) st.insert("use", id, kRecord);
-    for (auto& entry : st.get_all_tables()) st.flush_block_to_disk(entry.second);
+    REQUIRE(st.flush_all());
 
     std::atomic<int> mismatches{0};
     std::vector<std::thread> readers;
@@ -70,7 +70,7 @@ TEST_CASE("чтение во время записи не наблюдает п�
     // Эти записи существуют с самого начала, их значение меняться не должно.
     constexpr int kStable = 50;
     for (int id = 1; id <= kStable; ++id) st.insert("use", id, kRecord);
-    for (auto& entry : st.get_all_tables()) st.flush_block_to_disk(entry.second);
+    REQUIRE(st.flush_all());
 
     std::atomic<int> mismatches{0};
 
@@ -119,7 +119,7 @@ TEST_CASE("удаление и чтение идут параллельно бе
 
     constexpr int kRecords = 60;
     for (int id = 1; id <= kRecords; ++id) st.insert("use", id, kRecord);
-    for (auto& entry : st.get_all_tables()) st.flush_block_to_disk(entry.second);
+    REQUIRE(st.flush_all());
 
     std::atomic<int> bad{0};
 

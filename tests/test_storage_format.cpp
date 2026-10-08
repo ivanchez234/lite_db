@@ -26,9 +26,7 @@ std::vector<Column> user_schema() {
 }
 
 void flush_all(Storage& st) {
-    for (auto& entry : st.get_all_tables()) {
-        st.flush_block_to_disk(entry.second);
-    }
+    REQUIRE(st.flush_all());
 }
 
 } // namespace

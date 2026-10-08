@@ -1,5 +1,6 @@
 #include "storage.h"
 #include "byte_reader.h"
+#include "file_sync.h"
 
 #include <shared_mutex>
 #include <iostream>
@@ -19,15 +20,8 @@ Storage::Storage() {
     for (const auto& entry : fs::directory_iterator(root_path)) {
         if (entry.is_directory()) {
             std::string t_name = entry.path().filename().string();
-            create_table(t_name); 
+            create_table(t_name);
         }
-    }
-}
-
-Storage::~Storage() {
-    std::unique_lock<std::shared_mutex> lock(tables_mtx);
-    for (auto& [name, table] : tables) {
-        delete table;
     }
 }
 
@@ -107,7 +101,7 @@ std::vector<char> Storage::strip_field(const char* payload, size_t payload_size,
                                        uint32_t field_hash, std::string& value, bool& found) {
     found = false;
 
-    const std::vector<char> unchanged(payload, payload + payload_size);
+    std::vector<char> unchanged(payload, payload + payload_size);
 
     ByteReader reader(payload, payload_size);
 
@@ -513,58 +507,76 @@ void Storage::insert_to_block(Table* t, const std::vector<char>& raw_record) {
     t->write_buffer.insert(t->write_buffer.end(), raw_record.begin(), raw_record.end());
 
     if (t->write_buffer.size() >= t->BLOCK_SIZE) {
-        flush_block_to_disk(t);
+        // Неудачный сброс не теряет данных: они остаются в буфере (и в журнале),
+        // а следующая запись попробует сбросить их снова.
+        if (!flush_block_to_disk(t)) {
+            std::cerr << "[Storage] Could not flush block of table '" << t->name
+                      << "', keeping it in memory" << std::endl;
+        }
     }
 }
 
-void Storage::flush_block_to_disk(Table* t) {
-    if (t->write_buffer.empty()) return;
+bool Storage::flush_block_to_disk(Table* t) {
+    if (t->write_buffer.empty()) return true;
 
     // 1. УМНАЯ ПРОВЕРКА ЛИМИТА ДО ОТКРЫТИЯ ФАЙЛА
     std::string path = t->path + "seg_" + std::to_string(t->current_seg_id) + ".db";
     
     // Если текущий файл уже существует и его размер перевалил за MAX_SEG_SIZE
-    if (fs::exists(path) && fs::file_size(path) >= MAX_SEG_SIZE) {
+    std::error_code size_ec;
+    if (fs::exists(path) && fs::file_size(path, size_ec) >= MAX_SEG_SIZE && !size_ec) {
         t->current_seg_id++; // Увеличиваем номер сегмента
         path = t->path + "seg_" + std::to_string(t->current_seg_id) + ".db"; // Обновляем путь!
     }
 
-    // 2. ОТКРЫВАЕМ ФАЙЛ
-    std::ofstream file(path, std::ios::binary | std::ios::app);
-    file.seekp(0, std::ios::end);
-    std::streampos block_start = file.tellp(); // Запоминаем позицию для индекса
-
     // ==========================================
-    // НОВЫЙ ШАГ: КОЛОНОЧНАЯ ПЕРЕПАКОВКА
+    // КОЛОНОЧНАЯ ПЕРЕПАКОВКА И СЖАТИЕ — ДО ОТКРЫТИЯ ФАЙЛА
     // ==========================================
+    // Если сжатие не удастся, файл не трогаем вовсе.
     std::vector<char> columnar_data = pack_columns(t);
 
-    // 3. СЖАТИЕ ЧЕРЕЗ ZLIB (DEFLATE)
     uLongf original_size = columnar_data.size();
-    uLongf max_compressed_size = compressBound(original_size);
-    std::vector<char> compressed(max_compressed_size);
+    uLongf compressed_size = compressBound(original_size);
+    std::vector<char> compressed(compressed_size);
 
     int res = compress(
         (Bytef*)compressed.data(), 
-        &max_compressed_size, 
+        &compressed_size, 
         (const Bytef*)columnar_data.data(), // ЖМЕМ УЖЕ КОЛОНКИ!
         original_size
     );
-
-    if (res != Z_OK) {
-        // Ошибка сжатия (в идеале нужно залогировать)
-        file.close();
-        return; 
-    }
+    if (res != Z_OK) return false;
 
     CompressedBlockHeader header;
-    header.original_size = original_size;
-    header.compressed_size = max_compressed_size; // Пишем реальный размер
+    header.original_size = static_cast<uint32_t>(original_size);
+    header.compressed_size = static_cast<uint32_t>(compressed_size); // Пишем реальный размер
 
-    file.write(reinterpret_cast<char*>(&header), sizeof(header));
-    file.write(compressed.data(), max_compressed_size); // Пишем ровно столько, сколько сжалось
+    // ==========================================
+    // ЗАПИСЬ БЛОКА
+    // ==========================================
+    std::ofstream file(path, std::ios::binary | std::ios::app);
+    if (!file.is_open()) return false;
+    file.seekp(0, std::ios::end);
+    const std::streampos block_start = file.tellp(); // Запоминаем позицию для индекса
 
-    // 4. ОБНОВЛЕНИЕ ИНДЕКСА
+    file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    file.write(compressed.data(), static_cast<std::streamsize>(compressed_size));
+    file.flush();
+    const bool written = static_cast<bool>(file);
+    file.close();
+
+    if (!written || file.fail()) {
+        // Блок мог записаться наполовину (например, кончилось место). Обрезаем
+        // хвост, иначе следующий блок встанет после мусора и при перезапуске
+        // чтение сегмента остановится на этом мусоре вместе со всем, что за ним.
+        std::error_code ec;
+        fs::resize_file(path, static_cast<std::uintmax_t>(block_start), ec);
+        return false;
+    }
+
+    // ==========================================
+    // ОБНОВЛЕНИЕ ИНДЕКСА — ТОЛЬКО ПОСЛЕ УСПЕШНОЙ ЗАПИСИ
+    // ==========================================
     size_t offset = 0;
     RecordView rec;
     while (next_record(t->write_buffer.data(), t->write_buffer.size(), offset, rec)) {
@@ -572,17 +584,54 @@ void Storage::flush_block_to_disk(Table* t) {
             t->index.erase(rec.id); // Удаляем из индекса, если надгробие
         } else {
             // Пишем актуальный путь (path) и смещение
-            t->index[rec.id] = { path, static_cast<size_t>(block_start) };
+            t->index[rec.id] = { path, block_start };
         }
     }
 
-    file.close();
+    t->unsynced_segments.insert(path);
     t->write_buffer.clear(); 
+    return true;
+}
+
+bool Storage::sync_segments(Table* t) {
+    for (auto it = t->unsynced_segments.begin(); it != t->unsynced_segments.end();) {
+        if (!lite_db::sync_file(*it)) return false;
+        it = t->unsynced_segments.erase(it);
+    }
+    // Запись о самих файлах сегментов живёт в каталоге таблицы.
+    return lite_db::sync_directory(t->path);
+}
+
+bool Storage::flush_all() {
+    std::shared_lock<std::shared_mutex> catalog(tables_mtx);
+
+    bool ok = true;
+    for (auto& entry : tables) {
+        Table* t = entry.second.get();
+        std::unique_lock<std::shared_mutex> lock(t->mtx);
+
+        if (!flush_block_to_disk(t)) {
+            std::cerr << "[Storage] FLUSH: could not write table '" << t->name << "'" << std::endl;
+            ok = false;
+        } else if (!sync_segments(t)) {
+            std::cerr << "[Storage] FLUSH: fsync failed for table '" << t->name << "'" << std::endl;
+            ok = false;
+        }
+    }
+
+    // Каталоги таблиц создаются внутри root_path.
+    if (!lite_db::sync_directory(root_path)) ok = false;
+    return ok;
 }
 
 Table* Storage::find_table(const std::string& name) {
     const auto it = tables.find(name);
-    return it == tables.end() ? nullptr : it->second;
+    return it == tables.end() ? nullptr : it->second.get();
+}
+
+Table* Storage::lookup_table(const std::string& name) {
+    std::shared_lock<std::shared_mutex> lock(tables_mtx);
+    return find_table(name);
 }
 
 std::map<std::string, std::string> Storage::parse_json_manual(std::string s) {
@@ -598,8 +647,8 @@ std::map<std::string, std::string> Storage::parse_json_manual(std::string s) {
         if (colon != std::string::npos) {
             std::string k = item.substr(0, colon);
             std::string v = item.substr(colon + 1);
-            k.erase(0, k.find_first_not_of(" ")); k.erase(k.find_last_not_of(" ") + 1);
-            v.erase(0, v.find_first_not_of(" ")); v.erase(v.find_last_not_of(" ") + 1);
+            k.erase(0, k.find_first_not_of(' ')); k.erase(k.find_last_not_of(' ') + 1);
+            v.erase(0, v.find_first_not_of(' ')); v.erase(v.find_last_not_of(' ') + 1);
             res[k] = v;
         }
     }
@@ -644,9 +693,10 @@ bool Storage::validate_types(Table* t, const std::map<std::string, std::string>&
     return true;
 }
 
-std::vector<char> Storage::pack_json(const std::string& json_str, Table* t) {
+bool Storage::pack_json(const std::string& json_str, Table* t, std::vector<char>& buf) {
     auto data = parse_json_manual(json_str);
-    if (!validate_types(t, data)) throw std::runtime_error("ERR_CONSTRAINT_VIOLATION");
+    // Несоответствие схеме — обычный ответ клиенту, а не авария, поэтому код возврата.
+    if (!validate_types(t, data)) return false;
 
     BinaryHeader head;
     head.keys_count = (uint32_t)data.size();
@@ -667,34 +717,44 @@ std::vector<char> Storage::pack_json(const std::string& json_str, Table* t) {
 
     head.total_size = sizeof(BinaryHeader) + (uint32_t)(records.size() * sizeof(KeyRecord)) + (uint32_t)body.size();
 
-    std::vector<char> buf;
+    buf.clear();
     buf.insert(buf.end(), (char*)&head, (char*)&head + sizeof(BinaryHeader));
     for (auto& r : records) buf.insert(buf.end(), (char*)&r, (char*)&r + sizeof(KeyRecord));
     buf.insert(buf.end(), body.begin(), body.end());
-    return buf;
-}
-
-bool Storage::create_table(const std::string& name) {
-    std::unique_lock<std::shared_mutex> lock(tables_mtx);
-    if (tables.count(name)) return false;
-
-    std::string t_path = root_path + name + "/";
-    if (!fs::exists(t_path)) fs::create_directories(t_path);
-
-    Table* t = new Table();
-    t->name = name;
-    t->path = t_path;
-    tables[name] = t; 
-    
-    load_schema(t);
-    load_table_index(t);
     return true;
 }
 
-bool Storage::set_schema(const std::string& table_name, const std::vector<Column>& columns) {
+bool Storage::create_table(const std::string& name) {
+    {
+        std::shared_lock<std::shared_mutex> lock(tables_mtx);
+        if (find_table(name)) return false;
+    }
+
+    // Таблицу собираем без замка каталога: загрузка индекса читает все
+    // сегменты с диска, и держать на это время замок значило бы остановить
+    // все запросы ко всем таблицам.
+    auto t = std::make_unique<Table>();
+    t->name = name;
+    t->path = root_path + name + "/";
+
+    std::error_code ec;
+    fs::create_directories(t->path, ec);
+    if (ec) return false;
+
+    load_schema(t.get());
+    load_table_index(t.get());
+
     std::unique_lock<std::shared_mutex> lock(tables_mtx);
-    Table* t = find_table(table_name);
+    // Пока мы читали диск, ту же таблицу мог создать другой поток.
+    return tables.emplace(name, std::move(t)).second;
+}
+
+bool Storage::set_schema(const std::string& table_name, const std::vector<Column>& columns) {
+    Table* t = lookup_table(table_name);
     if (!t) return false;
+
+    // Схему читают запросы к таблице, поэтому меняем её под замком таблицы.
+    std::unique_lock<std::shared_mutex> lock(t->mtx);
     t->schema = columns;
     save_schema(t); 
     return true;
@@ -732,22 +792,32 @@ void Storage::load_schema(Table* t) {
     }
 }
 
-bool Storage::insert(const std::string& table_name, int id, const std::string& json_str) {
-    Table* t = nullptr;
-    {
-        std::shared_lock<std::shared_mutex> lock(tables_mtx);
-        t = find_table(table_name);
-        if (!t) return false;
-    }
+WriteResult Storage::insert(const std::string& table_name, int id, const std::string& json_str,
+                           WriteMode mode, const WriteLog& log) {
+    Table* t = lookup_table(table_name);
+    if (!t) return WriteResult::table_not_found;
+
     std::unique_lock<std::shared_mutex> t_lock(t->mtx);
-    
-    std::vector<char> bin = pack_json(json_str, t);
+
+    // Проверка и вставка под одним замком. Если проверить отдельно, два
+    // INSERT с одним id могут оба увидеть «свободно» и оба записаться.
+    if (mode == WriteMode::insert && exists_locked(t, id)) return WriteResult::id_exists;
+
+    // Сначала проверяем данные, потом пишем в журнал: мусор, который всё
+    // равно будет отвергнут, не должен попадать в журнал.
+    std::vector<char> bin;
+    if (!pack_json(json_str, t, bin)) return WriteResult::invalid_data;
+
+    // Журнал под замком таблицы: порядок записей в журнале совпадает
+    // с порядком применения, и восстановление воспроизведёт ту же историю.
+    if (log && !log()) return WriteResult::log_failed;
+
     std::vector<char> full_record;
     full_record.insert(full_record.end(), reinterpret_cast<char*>(&id), reinterpret_cast<char*>(&id) + sizeof(int));
     full_record.insert(full_record.end(), bin.begin(), bin.end());
 
     insert_to_block(t, full_record);
-    return true;
+    return WriteResult::ok;
 }
 
 std::string Storage::select(const std::string& table_name, int id, const std::string& target_key) {
@@ -902,14 +972,16 @@ std::string Storage::select_all(const std::string& table_name) {
 
     if (latest_data.empty()) return "[]";
 
-    std::string result = "[\n";
+    // Без переводов строк: в протоколе перевод строки — конец ответа, и
+    // многострочный ответ клиент принял бы за несколько разных ответов.
+    std::string result = "[";
     bool first = true;
     for (const auto& [id, json_str] : latest_data) {
-        if (!first) result += ",\n";
-        result += "  { \"id\": " + std::to_string(id) + ", \"data\": " + json_str + " }";
+        if (!first) result += ", ";
+        result += "{ \"id\": " + std::to_string(id) + ", \"data\": " + json_str + " }";
         first = false;
     }
-    result += "\n]";
+    result += "]";
     return result;
 }
 
@@ -940,12 +1012,8 @@ void Storage::load_table_index(Table* t) {
     t->current_seg_id = std::max(0, sid - 1);
 }
 
-bool Storage::exists(const std::string& table_name, int id) {
-    std::shared_lock<std::shared_mutex> lock(tables_mtx);
-    Table* t = find_table(table_name);
-    if (!t) return false;
-    std::shared_lock<std::shared_mutex> t_lock(t->mtx);
-
+bool Storage::exists_locked(Table* t, int id) {
+    // Буфер новее диска: последняя версия записи в буфере решает всё.
     size_t buf_off = 0;
     bool found_in_buf = false;
     bool is_deleted = false;
@@ -962,16 +1030,25 @@ bool Storage::exists(const std::string& table_name, int id) {
     return t->index.find(id) != t->index.end();
 }
 
-void Storage::remove(const std::string& table_name, int id) {
-    std::shared_lock<std::shared_mutex> lock(tables_mtx);
-    Table* t = find_table(table_name);
-    if (!t) return;
+bool Storage::exists(const std::string& table_name, int id) {
+    Table* t = lookup_table(table_name);
+    if (!t) return false;
+    std::shared_lock<std::shared_mutex> t_lock(t->mtx);
+    return exists_locked(t, id);
+}
+
+WriteResult Storage::remove(const std::string& table_name, int id, const WriteLog& log) {
+    Table* t = lookup_table(table_name);
+    if (!t) return WriteResult::table_not_found;
     std::unique_lock<std::shared_mutex> t_lock(t->mtx);
+
+    if (!exists_locked(t, id)) return WriteResult::not_found;
+    if (log && !log()) return WriteResult::log_failed;
 
     t->index.erase(id); 
 
     std::vector<char> tombstone;
     tombstone.insert(tombstone.end(), reinterpret_cast<char*>(&id), reinterpret_cast<char*>(&id) + sizeof(int));
     insert_to_block(t, tombstone);
+    return WriteResult::ok;
 }
-

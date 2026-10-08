@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Linux нужен не «для галочки»: только здесь работают ThreadSanitizer
+  # (на Windows его нет вовсе) и AddressSanitizer под GCC.
+  linux:
+    name: linux (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      # Показываем полную картину, а не останавливаемся на первой поломке.
+      fail-fast: false
+      matrix:
+        include:
+          - name: release
+            build_type: Release
+            sanitizer: ""
+          - name: asan-ubsan
+            build_type: Debug
+            sanitizer: address+undefined
+          - name: tsan
+            build_type: Debug
+            sanitizer: thread
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+
+      # Новые ядра Ubuntu рандомизируют адреса сильнее, чем рассчитывает TSan,
+      # и он падает при старте с "unexpected memory mapping".
+      - name: Relax ASLR for ThreadSanitizer
+        if: matrix.sanitizer == 'thread'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DLITE_DB_SANITIZER=${{ matrix.sanitizer }}
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 900
+
+  windows:
+    name: windows (mingw64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-python
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 900
+
+  clang-tidy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang clang-tidy zlib1g-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_CXX_COMPILER=clang++ -DLITE_DB_BUILD_TESTS=OFF
+
+      # Настройки проверок — в .clang-tidy. Любая находка роняет шаг.
+      - name: Run clang-tidy
+        run: |
+          clang-tidy --version
+          git ls-files '*.cpp' ':!:tests/*' | xargs -n 1 -P 4 clang-tidy -p build --quiet

@@ -60,7 +60,7 @@ namespace SQLParser {
                         }
                         
                         if (c == "id") id = v;
-                        json += "\"" + c + "\":" + v;
+                        json.append("\"").append(c).append("\":").append(v);
                         if (i < cols.size() - 1) json += ",";
                     }
                     json += "}";
@@ -113,7 +113,7 @@ namespace SQLParser {
                             if (!v.empty() && v.front() == '\'' && v.back() == '\'') {
                                 v = "\"" + v.substr(1, v.size() - 2) + "\"";
                             }
-                            json += "\"" + k + "\":" + v;
+                            json.append("\"").append(k).append("\":").append(v);
                             if (i < pairs.size() - 1) json += ",";
                         }
                     }

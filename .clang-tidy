@@ -1,0 +1,29 @@
+# Статический анализ. Набор проверок — те классы ошибок, которые реально
+# встречались в проекте: игнор кодов возврата, исключения, вылетающие из
+# потоков, гонки, владение памятью.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result,
+  cert-err33-c,
+  cert-err58-cpp,
+  clang-analyzer-*,
+  concurrency-*,
+  cppcoreguidelines-owning-memory,
+  cppcoreguidelines-no-malloc,
+  performance-*,
+  -performance-avoid-endl,
+  -performance-enum-size
+
+# performance-enum-size выключен сознательно: DataType записывается в файл
+# схемы как есть (sizeof(DataType)), и смена его размера сломала бы чтение
+# уже существующих баз.
+
+# Любая находка ломает сборку в CI: предупреждения, которые можно
+# игнорировать, со временем игнорируют все.
+WarningsAsErrors: '*'
+
+# Только свой код: заголовки Catch2 и системные не проверяем.
+HeaderFilterRegex: '.*/(storage|database|server|Orm)/.*'

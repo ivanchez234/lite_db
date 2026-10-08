@@ -27,6 +27,13 @@ class LiteDBDialect(DefaultDialect):
     def connect(self, *cargs, **cparams):
         return self.dbapi.connect(*cargs, **cparams)
 
+    def do_rollback(self, dbapi_connection):
+        # Транзакций в lite_db нет, и драйвер честно отказывается делать
+        # rollback(). Но пул соединений SQLAlchemy вызывает rollback каждый раз,
+        # когда соединение возвращается в пул, — «на всякий случай», даже
+        # если ничего не менялось. Откатывать нечего, поэтому здесь no-op.
+        pass
+
 # 2. РЕГИСТРИРУЕМ ДИАЛЕКТ В SQLAlchemy
 registry.register("litedb", "main_orm", "LiteDBDialect")
 

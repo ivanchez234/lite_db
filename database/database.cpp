@@ -14,32 +14,53 @@ std::string trim_cmd(const std::string& s) {
     return s.substr(first, (last - first + 1));
 }
 
-// Параметр не используется: Storage сам управляет папкой data/.
-// Оставлен, чтобы не менять вызов в main.cpp.
-Database::Database(const std::string&)
-    : wal("wal.log") {
+namespace {
+
+std::string to_response(WriteResult result) {
+    switch (result) {
+        case WriteResult::ok:              return "OK";
+        case WriteResult::table_not_found: return "ERR_TABLE_NOT_FOUND";
+        case WriteResult::id_exists:       return "ERR_ID_EXISTS";
+        case WriteResult::not_found:       return "ERR_NOT_FOUND";
+        case WriteResult::invalid_data:    return "ERR_CONSTRAINT_VIOLATION";
+        // Клиент не должен получить OK за операцию, которой нет в журнале:
+        // после аварии она бы молча исчезла.
+        case WriteResult::log_failed:      return "ERR_WAL_WRITE_FAILED";
+    }
+    return "ERR_INTERNAL";
+}
+
+} // namespace
+
+Database::Database(const std::string& wal_path)
+    : wal(wal_path) {
     if (!wal.is_open()) {
-        std::cerr << "WARNING: Could not open wal.log for writing!" << std::endl;
+        std::cerr << "WARNING: Could not open " << wal_path
+                  << " for writing! All writes will be rejected." << std::endl;
     }
 }
+
 Database::~Database() {
     std::cout << "[System] Flushing buffers to disk before shutdown..." << std::endl;
-    for (auto& pair : storage.get_all_tables()) { 
-        storage.flush_block_to_disk(pair.second); 
+    std::unique_lock<std::shared_mutex> lock(checkpoint_mutex);
+
+    // Журнал очищаем, только если данные действительно на диске.
+    // Иначе он остаётся, и при следующем запуске всё восстановится из него.
+    if (!storage.flush_all()) {
+        std::cerr << "[System] Flush failed, keeping WAL for recovery on next start" << std::endl;
+        return;
     }
-    clear_wal(); // Данные надёжно на диске, черновик можно сжечь
+    if (!wal.reset()) {
+        std::cerr << "[System] Could not clear WAL" << std::endl;
+    }
 }
 
 // --- РЕАЛИЗАЦИЯ WAL ---
 
-void Database::append_to_wal(const std::string& query) {
+bool Database::log_write(const std::string& query) {
     // Во время восстановления журнал не дописываем: мы его как раз читаем.
-    if (is_recovering) return;
-    wal.append(query);
-}
-
-void Database::clear_wal() {
-    wal.reset();
+    if (is_recovering) return true;
+    return wal.append(query);
 }
 
 void Database::recover_from_wal() {
@@ -50,6 +71,9 @@ void Database::recover_from_wal() {
               << " uncommitted operations." << std::endl;
     std::cout << "[WAL] Replaying log to restore Write Buffer..." << std::endl;
 
+    // Часть операций могла успеть попасть на диск при автоматическом сбросе
+    // блока. Их повтор безвреден: INSERT вернёт ERR_ID_EXISTS, а UPDATE и
+    // DELETE приведут запись к тому же итоговому состоянию.
     is_recovering = true;
     for (const std::string& query : records) {
         execute(query); // Скармливаем команду базе, будто её прислал клиент
@@ -80,7 +104,7 @@ void Database::load_config(const std::string& filename) {
 
         // Глобальная настройка: насколько надёжно журнал проталкивается на диск.
         if (indent == 0 && line.find("wal_sync:") != std::string::npos) {
-            const std::string value = trim_cmd(line.substr(line.find(":") + 1));
+            const std::string value = trim_cmd(line.substr(line.find(':') + 1));
             Wal::Sync mode;
             if (Wal::parse_sync_mode(value, mode)) {
                 wal.set_sync_mode(mode);
@@ -102,7 +126,7 @@ void Database::load_config(const std::string& filename) {
                 std::cout << "[Config] Table '" << current_table << "' initialized from YAML." << std::endl;
             }
             
-            current_table = trim_cmd(line.substr(line.find(":") + 1));
+            current_table = trim_cmd(line.substr(line.find(':') + 1));
             current_cols.clear();
             in_schema = false; // Сбрасываем флаг схемы, так как началась новая таблица
         } 
@@ -112,7 +136,7 @@ void Database::load_config(const std::string& filename) {
         }
         // 4. Если мы в режиме схемы и видим строку, начинающуюся с "- " — это КОЛОНКА
         else if (in_schema && line.find("- ") != std::string::npos) {
-            size_t colon = line.find(":");
+            size_t colon = line.find(':');
             if (colon != std::string::npos) {
                 // Извлекаем имя колонки (между "- " и ":")
                 size_t dash_pos = line.find("- ");
@@ -149,31 +173,29 @@ std::string Database::execute(const std::string& raw_query) {
     if (!(ss >> cmd)) return "ERR_EMPTY_QUERY";
     std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
 
-    // 0. FLUSH - принудительный сброс (ЗАПИСЬ)
+    // 0. FLUSH — контрольная точка: буферы на диск, fsync, очистка журнала.
     if (cmd == "FLUSH") {
-        std::unique_lock<std::shared_mutex> lock(db_mutex); // Эксклюзивная блокировка
-        for (auto& pair : storage.get_all_tables()) {
-            storage.flush_block_to_disk(pair.second);
-        }
-        clear_wal();
+        std::unique_lock<std::shared_mutex> lock(checkpoint_mutex);
+        if (!storage.flush_all()) return "ERR_FLUSH_FAILED";
+        // Данные на диске — черновик можно сжечь.
+        if (!wal.reset()) return "ERR_WAL_RESET_FAILED";
         return "OK: All buffers flushed to disk";
     }
 
     // Извлекаем имя таблицы (делаем это ДО блокировок, чтобы не тормозить потоки)
     if (!(ss >> table_name)) return "ERR_MISSING_TABLE_NAME";
-    // Предполагаю, что trim_cmd у тебя определена где-то выше в файле
     table_name = trim_cmd(table_name); 
 
-    // 1. CREATE (ЗАПИСЬ)
+    // 1. CREATE (DDL)
     if (cmd == "CREATE") {
-        std::unique_lock<std::shared_mutex> lock(db_mutex); // Эксклюзивная блокировка
+        std::unique_lock<std::shared_mutex> lock(checkpoint_mutex);
         if (storage.create_table(table_name)) {
             return "OK: Table '" + table_name + "' created";
         }
         return "ERR_TABLE_ALREADY_EXISTS";
     }
 
-    // 2. SCHEMA (ЗАПИСЬ)
+    // 2. SCHEMA (DDL)
     if (cmd == "SCHEMA") {
         std::vector<Column> cols;
         std::string pair;
@@ -190,28 +212,28 @@ std::string Database::execute(const std::string& raw_query) {
             if (type_str == "INT") type = DataType::INT;
             else if (type_str == "DOUBLE") type = DataType::DOUBLE;
             else if (type_str == "BOOL") type = DataType::BOOL;
+            else if (type_str == "DATE") type = DataType::DATE;
             
             cols.push_back({col_name, type});
         }
         
         if (cols.empty()) return "ERR_EMPTY_SCHEMA";
         
-        std::unique_lock<std::shared_mutex> lock(db_mutex); // Блокируем только момент применения
+        std::unique_lock<std::shared_mutex> lock(checkpoint_mutex);
         if (storage.set_schema(table_name, cols)) return "OK: Schema applied";
         return "ERR_TABLE_NOT_FOUND";
     }
 
-    // 3. SELECT (ЧТЕНИЕ - Разрешаем многопоточность!)
+    // 3. SELECT — без замка контрольной точки.
+    // Storage защищает каждую таблицу разделяемым замком, поэтому чтения
+    // разных и одной и той же таблицы идут параллельно, а запись в таблицу
+    // ждёт только читателей этой таблицы.
     if (cmd == "SELECT") {
         std::string arg;
         if (!(ss >> arg)) return "ERR_MISSING_ARGUMENTS";
         
         std::string upper_arg = arg;
         std::transform(upper_arg.begin(), upper_arg.end(), upper_arg.begin(), ::toupper);
-
-        // Разделяемый замок: несколько SELECT выполняются одновременно,
-        // но ни один не пересечётся с записью.
-        std::shared_lock<std::shared_mutex> lock(db_mutex);
 
         if (upper_arg == "ALL" || upper_arg == "*") {
             return storage.select_all(table_name);
@@ -229,7 +251,11 @@ std::string Database::execute(const std::string& raw_query) {
         }
     }
 
-    // 4. INSERT / UPDATE (ЗАПИСЬ)
+    // Журнал вызывается изнутри Storage под замком таблицы — после проверки
+    // данных и до их применения (см. Storage::insert).
+    const WriteLog log = [this, &query] { return log_write(query); };
+
+    // 4. INSERT / UPDATE
     if (cmd == "INSERT" || cmd == "UPDATE") {
         int id;
         if (!(ss >> id)) return "ERR_INVALID_ID";
@@ -238,38 +264,21 @@ std::string Database::execute(const std::string& raw_query) {
         body = trim_cmd(body);
         
         if (body.empty()) return "ERR_EMPTY_BODY";
-        
-        // Эксклюзивная блокировка (Только ОДИН поток может писать в данный момент)
-        std::unique_lock<std::shared_mutex> lock(db_mutex); 
-        
-        if (cmd == "INSERT" && storage.exists(table_name, id)) {
-            return "ERR_ID_EXISTS";
-        }
-        
-        try {
-            // Сначала журнал, потом данные: в этом и состоит предзапись.
-            // Обратный порядок означал бы, что после аварии изменение могло
-            // примениться, не попав в журнал.
-            append_to_wal(query);
-            if (!storage.insert(table_name, id, body)) return "ERR_TABLE_NOT_FOUND";
-            return "OK";
-        } catch (const std::exception& e) {
-            return std::string("ERR: ") + e.what();
-        }
+
+        // Разделяемо: записи в разные таблицы не ждут друг друга.
+        std::shared_lock<std::shared_mutex> lock(checkpoint_mutex);
+
+        const WriteMode mode = (cmd == "INSERT") ? WriteMode::insert : WriteMode::upsert;
+        return to_response(storage.insert(table_name, id, body, mode, log));
     }
 
-    // 5. DELETE (ЗАПИСЬ)
+    // 5. DELETE
     if (cmd == "DELETE") {
         int id;
         if (!(ss >> id)) return "ERR_INVALID_ID";
-        
-        std::unique_lock<std::shared_mutex> lock(db_mutex); // Эксклюзивная блокировка
-        
-        if (!storage.exists(table_name, id)) return "ERR_NOT_FOUND";
 
-        append_to_wal(query);
-        storage.remove(table_name, id);
-        return "OK";
+        std::shared_lock<std::shared_mutex> lock(checkpoint_mutex);
+        return to_response(storage.remove(table_name, id, log));
     }
 
     return "ERR_UNKNOWN_COMMAND";
