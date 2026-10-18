@@ -405,6 +405,7 @@ bool Storage::extract_field(const char* data_ptr, size_t payload_size,
 
     BinaryHeader head;
     if (!reader.read(head)) return false;
+    if (head.magic != BinaryHeader{}.magic) return false;
 
     const size_t keys_offset = sizeof(BinaryHeader);
     if (head.keys_count > (payload_size - keys_offset) / sizeof(KeyRecord)) return false;

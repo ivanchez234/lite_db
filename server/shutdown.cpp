@@ -1,5 +1,4 @@
 #include "shutdown.h"
-
 #include <atomic>
 
 #ifdef _WIN32

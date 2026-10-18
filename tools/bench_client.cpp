@@ -15,6 +15,7 @@
 
 namespace {
 
+    
 using Clock = std::chrono::steady_clock;
 
 struct Options {

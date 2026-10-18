@@ -1,9 +1,7 @@
 // Перевод SQL во внутренние команды.
 
 #include <catch2/catch_test_macros.hpp>
-
 #include "Orm/sql_parser.h"
-
 #include <string>
 
 using SQLParser::translate;

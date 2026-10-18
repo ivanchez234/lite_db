@@ -3,9 +3,7 @@
 // pack_columns/unpack_columns: так проверяется поведение, а не устройство.
  
 #include <catch2/catch_test_macros.hpp>
- 
 #include "storage/storage.h"
- 
 #include <filesystem>
 #include <string>
  

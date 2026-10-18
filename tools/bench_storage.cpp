@@ -16,6 +16,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+
 double us_since(Clock::time_point start) {
     return std::chrono::duration<double, std::micro>(Clock::now() - start).count();
 }

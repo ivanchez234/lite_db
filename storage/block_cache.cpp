@@ -1,5 +1,4 @@
 #include "block_cache.h"
-
 #include <functional>
 
 namespace {

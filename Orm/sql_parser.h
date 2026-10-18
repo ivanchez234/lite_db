@@ -2,7 +2,6 @@
 #include <string>
 #include <vector>
 
-
 namespace SQLParser {
     std::string translate(const std::string& query);
 

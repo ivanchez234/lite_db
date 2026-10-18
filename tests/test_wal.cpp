@@ -6,7 +6,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "database/wal.h"
-
 #include <atomic>
 #include <filesystem>
 #include <fstream>

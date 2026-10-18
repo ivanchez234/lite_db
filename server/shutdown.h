@@ -1,5 +1,4 @@
 #pragma once
-
 // Остановка сервера по Ctrl+C.
 
 namespace lite_db {

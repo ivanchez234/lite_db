@@ -26,7 +26,6 @@ bool sync_directory(const std::string&) noexcept {
 }
 
 #else
-
 namespace {
 
 int open_retrying(const char* path, int flags) noexcept {

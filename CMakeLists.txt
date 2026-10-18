@@ -49,9 +49,6 @@ function(lite_db_static_runtime target)
     endif()
 endfunction()
 
-
-
-
 add_library(lite_db_core STATIC
     storage/storage.cpp
     storage/file_sync.cpp

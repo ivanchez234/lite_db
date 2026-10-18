@@ -7,8 +7,7 @@ from sqlalchemy.dialects import registry
 class LiteDBDialect(DefaultDialect):
     name = 'litedb'
     driver = 'litedb_driver'
-    
-    # Отключаем сложные фичи, чтобы SQLAlchemy не мучала наш парсер сложными системными запросами
+
     supports_alter = False
     supports_pk_autoincrement = False
     supports_default_values = False

@@ -1,7 +1,6 @@
 #include "sql_parser.h"
 
 #include "../storage/json.h"
-
 #include <algorithm>
 #include <cctype>
 #include <regex>

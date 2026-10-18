@@ -1,7 +1,6 @@
 #include "database/database.h"
 #include "server/shutdown.h"
 #include "server/tcp_server.h"
-
 #include <exception>
 #include <iostream>
 #include <string>
@@ -23,7 +22,7 @@ int main(int argc, char** argv) {
 
         std::cout << "[System] Press Ctrl+C to stop the server" << std::endl;
         server.run();   
-        
+
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "[System] Fatal error: " << e.what() << std::endl;

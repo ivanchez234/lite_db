@@ -10,7 +10,6 @@
 #include <shared_mutex>
 #include <fstream>
 #include <filesystem>
-#include <zlib.h>
 
 #include "json.h"
 #include "metrics.h"
@@ -109,7 +108,7 @@ private:
 
     // Потолок для размеров, прочитанных из файла, и порог перехода на новый сегмент
     static constexpr uint32_t MAX_BLOCK_SIZE = 64u * 1024u * 1024u;
-    const size_t MAX_SEG_SIZE = 10 * 1024 * 1024;
+    static constexpr size_t MAX_SEG_SIZE = 10 * 1024 * 1024;
 
     // Сколько байт копить в write_buffer, прежде чем сжать их в блок
     std::atomic<size_t> block_size_{4096};
@@ -128,7 +127,7 @@ private:
     // Запись: поля из JSON в байты записи set_schema
     using FieldMap = std::map<std::string, lite_db::json::Value>;
 
-    uint32_t hash_string(const std::string& s);
+    static uint32_t hash_string(const std::string& s);
     void fill_id_column(Table* t, int id, FieldMap& fields);
     std::vector<char> make_record(int id, const FieldMap& fields);   
 

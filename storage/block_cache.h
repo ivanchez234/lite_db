@@ -1,7 +1,6 @@
 #pragma once
 
 #include "metrics.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>

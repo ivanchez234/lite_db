@@ -1,5 +1,4 @@
 #include "json.h"
-
 #include <cstdint>
 
 namespace lite_db::json {

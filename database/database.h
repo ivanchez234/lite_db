@@ -4,7 +4,6 @@
 #include "../storage/storage.h"
 #include "wal.h"
 
-
 class Database {
 private:
     Storage storage;

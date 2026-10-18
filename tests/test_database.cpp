@@ -9,7 +9,6 @@
 
 #include "database/database.h"
 #include "database/wal.h"
-
 #include <atomic>
 #include <filesystem>
 #include <fstream>

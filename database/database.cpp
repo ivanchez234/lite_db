@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <iostream>
 #include <fstream>
- 
- 
+
+
 // Вспомогательная функция для очистки строк от мусора
 std::string trim_cmd(const std::string& s) {
     size_t first = s.find_first_not_of(" \n\r\t;");

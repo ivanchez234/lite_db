@@ -1,7 +1,6 @@
 #pragma once
 
 #include "socket_handle.h"
-
 #include <atomic>
 #include <chrono>
 #include <condition_variable>

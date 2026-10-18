@@ -24,6 +24,7 @@ add_test(NAME lite_db_tests
          COMMAND lite_db_tests
          WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
+         
 # Тесты на сеть и конкурентность
 set_tests_properties(lite_db_tests PROPERTIES TIMEOUT 600)
 

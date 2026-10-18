@@ -1,7 +1,6 @@
 #include "wal.h"
 
 #include <zlib.h>
-
 #ifdef _WIN32
     #include <io.h>
     #define LITE_DB_FILENO _fileno
