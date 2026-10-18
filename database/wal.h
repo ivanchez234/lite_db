@@ -50,7 +50,7 @@ private:
     struct FileCloser {
 
         void operator()(std::FILE* f) const noexcept {
-            (void)std::fclose(f); 
+            (void)std::fclose(f); // NOLINT(cppcoreguidelines-owning-memory): владеет unique_ptr
         }
     };
     using FilePtr = std::unique_ptr<std::FILE, FileCloser>;

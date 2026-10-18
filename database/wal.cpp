@@ -175,7 +175,7 @@ bool Wal::reset() {
         return false;
     }
 
-    file_.reset(std::fopen(path_.c_str(), "a+b"));  
+    file_.reset(std::fopen(path_.c_str(), "a+b"));  // NOLINT(cppcoreguidelines-owning-memory): владеет FilePtr
     if (!file_ || !push_to_disk()) {
         failed_ = true;
         return false;
