@@ -5,10 +5,6 @@
 #include <cstring>
 #include <type_traits>
 
-// Последовательное чтение из буфера с проверкой границ.
-//
-// Нужен потому, что длины, количества и смещения берутся из самих данных:
-// обрезанный или повреждённый файл не должен уводить чтение за пределы буфера.
 class ByteReader {
 public:
     ByteReader(const char* data, std::size_t size) noexcept
@@ -17,8 +13,6 @@ public:
     std::size_t offset() const noexcept { return off_; }
     std::size_t remaining() const noexcept { return size_ - off_; }
 
-    // Именно разность, а не off_ + n <= size_: сложение переполнится
-    // на большом n, и проверка пропустит заведомо битую длину.
     bool has(std::size_t n) const noexcept { return size_ - off_ >= n; }
 
     template <class T>
@@ -31,7 +25,6 @@ public:
         return true;
     }
 
-    // Отдаёт указатель на n байт и сдвигает позицию. nullptr, если их нет.
     const char* take(std::size_t n) noexcept {
         if (!has(n)) return nullptr;
         const char* p = data_ + off_;
@@ -42,5 +35,5 @@ public:
 private:
     const char* data_;
     std::size_t size_;
-    std::size_t off_ = 0;   // инвариант: off_ <= size_
+    std::size_t off_ = 0;  
 };

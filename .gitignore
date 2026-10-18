@@ -1,11 +1,11 @@
-# ---------- Build output ----------
+# Build output
 build/
 Build/
 build-*/
 out/
 cmake-build-*/
 
-# ---------- CMake ----------
+# CMake
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
@@ -17,17 +17,17 @@ CTestTestfile.cmake
 Testing/
 _deps/
 
-# ---------- Object files ----------
+# Object files
 *.o
 *.obj
 *.lo
 *.slo
 
-# ---------- Precompiled headers ----------
+# Precompiled headers
 *.gch
 *.pch
 
-# ---------- Libraries ----------
+# Libraries
 *.lib
 *.a
 *.la
@@ -38,19 +38,19 @@ _deps/
 *.dll
 *.dll.a
 
-# ---------- Executables ----------
+# Executables
 *.exe
 *.out
 *.app
 
-# ---------- Debug info ----------
+# Debug info
 *.pdb
 *.ilk
 *.idb
 *.su
 *.dSYM/
 
-# ---------- Python ----------
+# Python 
 __pycache__/
 *.py[cod]
 *$py.class
@@ -59,7 +59,7 @@ venv/
 env/
 *.egg-info/
 
-# ---------- Editors and OS ----------
+# Editors and OS 
 .vscode/
 .idea/
 *.swp
@@ -68,7 +68,7 @@ env/
 .DS_Store
 Thumbs.db
 
-# ---------- lite_db runtime data ----------
+# lite_db runtime data 
 data/
 *.db
 wal.log

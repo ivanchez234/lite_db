@@ -65,6 +65,9 @@ class NotSupportedError(DatabaseError):
 _ERRORS = {
     "ERR_ID_EXISTS": IntegrityError,
     "ERR_CONSTRAINT_VIOLATION": IntegrityError,
+    "ERR_FIELD_HASH_COLLISION": DataError,
+    "ERR_SCHEMA_HASH_COLLISION": ProgrammingError,
+    "ERR_DUPLICATE_COLUMN": ProgrammingError,
     "ERR_TABLE_NOT_FOUND": ProgrammingError,
     "ERR_SQL_PARSER": ProgrammingError,
     "ERR_INVALID_JSON": DataError,

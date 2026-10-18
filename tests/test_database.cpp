@@ -355,6 +355,42 @@ TEST_CASE("колонка id в схеме заполняется ключом �
     REQUIRE(db.execute("SELECT col_test 250") == R"({"id":250,"name":"Ivan_Student","age":22})");
 }
 
+// --- Коллизии хешей имён полей -------------------------------------------------
+//
+// Поле в записи опознаётся только по 32-битному хешу имени (само имя не
+// хранится). У имён "hetairas" и "mentioner" хеш одинаковый (3940087062):
+// раньше SELECT по второму полю молча возвращал значение первого.
+
+TEST_CASE("схема с коллизией хешей имён колонок отвергается", "[database][regression]") {
+    reset_state();
+    Database db(kWal);
+    REQUIRE(db.execute("CREATE t").rfind("OK", 0) == 0);
+
+    REQUIRE(db.execute("SCHEMA t hetairas:STRING mentioner:STRING").rfind("ERR_SCHEMA_HASH_COLLISION", 0) == 0);
+    REQUIRE(db.execute("SCHEMA t name:STRING name:INT") == "ERR_DUPLICATE_COLUMN");
+    REQUIRE(db.execute("SCHEMA missing name:STRING") == "ERR_TABLE_NOT_FOUND");
+
+    // Отвергнутая схема не применилась: таблица осталась без схемы.
+    REQUIRE(db.execute(R"(INSERT t 1 {"hetairas":"AAA"})") == "OK");
+    REQUIRE(db.execute("SELECT t 1 hetairas") == "AAA");
+}
+
+TEST_CASE("запись с коллизией хешей имён полей отвергается и не попадает в журнал", "[database][regression]") {
+    reset_state();
+    Database db(kWal);
+    REQUIRE(db.execute("CREATE t").rfind("OK", 0) == 0);  // без схемы: имена полей задаёт клиент
+
+    REQUIRE(db.execute(R"(INSERT t 1 {"hetairas":"AAA","mentioner":"BBB"})")
+                .rfind("ERR_FIELD_HASH_COLLISION", 0) == 0);
+    // MPUT атомарен: из-за одной такой строки не вставляется весь пакет.
+    REQUIRE(db.execute(R"(MPUT t 2 {"x":1} 3 {"hetairas":"AAA","mentioner":"BBB"})")
+                .rfind("ERR_FIELD_HASH_COLLISION", 0) == 0);
+
+    REQUIRE(wal_records() == 0);
+    REQUIRE(db.execute("SELECT t 1 hetairas") == "ERR_NOT_FOUND");
+    REQUIRE(db.execute("SELECT t 2 x") == "ERR_NOT_FOUND");
+}
+
 // --- MPUT ----------------------------------------------------------------------
 
 namespace {

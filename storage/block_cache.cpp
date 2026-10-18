@@ -4,9 +4,6 @@
 
 namespace {
 
-// Накладные расходы на запись кеша сверх самих данных (ключ, узлы списка
-// и хеш-таблицы). Точное число не важно — важно, чтобы маленькие блоки
-// не считались бесплатными.
 constexpr size_t kEntryOverhead = 128;
 
 } // namespace
@@ -63,10 +60,8 @@ void BlockCache::put(const std::string& file, int64_t offset, Rows rows) {
     const size_t charge = rows->size() + key.size() + kEntryOverhead;
 
     std::lock_guard<std::mutex> lock(shard.mutex);
-    // Блок, который в одиночку не помещается, не кешируем: он вытеснил бы всё.
     if (charge > shard.capacity) return;
 
-    // Два читателя могли одновременно промахнуться и прочитать один блок.
     if (shard.index.count(key) != 0) return;
 
     shard.lru.push_front(Entry{key, std::move(rows), charge});

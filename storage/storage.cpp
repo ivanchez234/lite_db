@@ -13,8 +13,9 @@
 #include <sstream>
 #include <algorithm>
 #include <fstream>
-#include <cstring> // Для memcpy
+#include <cstring> 
 #include <zlib.h>
+#include <unordered_set>
 
 
 
@@ -34,17 +35,13 @@ Storage::Storage(std::string root) : root_path(std::move(root)) {
 
 namespace {
 
-// Одна запись в строковом буфере: [uint32 длина][int id][payload].
 struct RecordView {
     uint32_t    rec_sz       = 0;
     int         id           = 0;
-    const char* payload      = nullptr;  // nullptr у надгробия
+    const char* payload      = nullptr; 
     std::size_t payload_size = 0;
 };
 
-// Читает запись по смещению offset и сдвигает его на следующую.
-// false означает конец буфера либо повреждённые данные: длина записи взята
-// из самого буфера, и доверять ей без проверки нельзя.
 bool next_record(const char* data, std::size_t size, std::size_t& offset, RecordView& out) {
     if (offset > size) return false;
 
@@ -52,8 +49,8 @@ bool next_record(const char* data, std::size_t size, std::size_t& offset, Record
 
     uint32_t rec_sz = 0;
     if (!r.read(rec_sz)) return false;
-    if (rec_sz < sizeof(int)) return false;   // не вмещает даже id
-    if (!r.has(rec_sz)) return false;         // запись обрезана
+    if (rec_sz < sizeof(int)) return false;   
+    if (!r.has(rec_sz)) return false;        
 
     int id = 0;
     r.read(id);
@@ -80,12 +77,12 @@ std::vector<char> Storage::pack_bools(const std::vector<char>& bool_bytes) {
     std::vector<char> packed;
     if (bool_bytes.empty()) return packed;
 
-    size_t packed_size = (bool_bytes.size() + 7) / 8; // Округляем вверх
+    size_t packed_size = (bool_bytes.size() + 7) / 8; 
     packed.assign(packed_size, 0);
 
     for (size_t i = 0; i < bool_bytes.size(); ++i) {
-        if (bool_bytes[i]) { // Если true (не 0)
-            packed[i / 8] |= (1 << (i % 8)); // Устанавливаем конкретный бит
+        if (bool_bytes[i]) { 
+            packed[i / 8] |= (1 << (i % 8)); 
         }
     }
     return packed;
@@ -100,10 +97,6 @@ std::vector<char> Storage::unpack_bools(const std::vector<char>& packed, size_t 
     }
     return bool_bytes;
 }
-
-// Вырезает из записи поле с заданным хешем: убирает его KeyRecord, его байты из
-// тела и сдвигает смещения полей, лежавших после него. Значение уходит в value.
-// Если поля нет, запись возвращается без изменений, found остаётся false.
 std::vector<char> Storage::strip_field(const char* payload, size_t payload_size,
                                        uint32_t field_hash, std::string& value, bool& found) {
     found = false;
@@ -165,8 +158,6 @@ std::vector<char> Storage::strip_field(const char* payload, size_t payload_size,
     return out;
 }
 
-// Обратная операция: дописывает значение в конец тела и добавляет его KeyRecord.
-// Порядок полей в записи при этом меняется, но поиск идёт по хешу, а не по позиции.
 std::vector<char> Storage::insert_field(const char* payload, size_t payload_size,
                                         uint32_t field_hash, const std::string& value) {
     if (payload_size < sizeof(BinaryHeader)) {
@@ -211,17 +202,16 @@ std::vector<char> Storage::pack_columns(Table* t) {
 
     std::vector<uint32_t> sizes;
     std::vector<int> ids;
-    std::vector<char> payloads; // Сюда мы будем складывать "остатки" данных
-    std::vector<char> bool_column; // Наша новая колонка для BOOL!
+    std::vector<char> payloads; 
+    std::vector<char> bool_column; 
 
-    // 1. Ищем, есть ли в схеме колонка типа BOOL
     bool has_bool = false;
     uint32_t bool_hash = 0;
     for (const auto& col : t->schema) {
         if (col.type == DataType::BOOL) {
             has_bool = true;
             bool_hash = hash_string(col.name);
-            break; // Пока поддерживаем один BOOL для простоты
+            break;
         }
     }
 
@@ -232,8 +222,7 @@ std::vector<char> Storage::pack_columns(Table* t) {
 
         if (rec.payload_size > 0) {
             if (has_bool) {
-                // Значение уходит в битовую колонку и вырезается из самой записи,
-                // иначе оно лежало бы в блоке дважды.
+
                 std::string value;
                 bool found = false;
                 std::vector<char> stripped = strip_field(rec.payload, rec.payload_size,
@@ -254,9 +243,6 @@ std::vector<char> Storage::pack_columns(Table* t) {
         }
     }
 
-    // --- ЛОГИЧЕСКОЕ СЖАТИЕ ---
-    
-    // 1. Delta-кодирование для ID
     std::vector<int> delta_ids;
     if (!ids.empty()) {
         delta_ids.reserve(ids.size());
@@ -266,13 +252,11 @@ std::vector<char> Storage::pack_columns(Table* t) {
         }
     }
 
-    // 2. Битовая упаковка для BOOL (Сжатие 8х!)
     std::vector<char> packed_bools;
     if (has_bool) {
         packed_bools = pack_bools(bool_column);
     }
 
-    // --- СКЛЕЙКА В ФИНАЛЬНЫЙ БЛОК ---
     std::vector<char> columnar_buffer;
     uint32_t count = sizes.size();
     
@@ -280,7 +264,6 @@ std::vector<char> Storage::pack_columns(Table* t) {
     columnar_buffer.insert(columnar_buffer.end(), (char*)sizes.data(), (char*)(sizes.data() + sizes.size()));
     columnar_buffer.insert(columnar_buffer.end(), (char*)delta_ids.data(), (char*)(delta_ids.data() + delta_ids.size()));
     
-    // Пишем информацию о BOOL колонке
     char bool_flag = has_bool ? 1 : 0;
     columnar_buffer.insert(columnar_buffer.end(), &bool_flag, &bool_flag + 1);
     if (has_bool) {
@@ -304,8 +287,6 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
     uint32_t count = 0;
     if (!reader.read(count)) return {};
 
-    // count прочитан из блока. Сначала убеждаемся, что столько колонок вообще
-    // помещается в оставшиеся байты, и только потом умножаем на размер элемента.
     if (count > reader.remaining() / (sizeof(uint32_t) + sizeof(int))) return {};
 
     const char* sizes_raw = reader.take(count * sizeof(uint32_t));
@@ -313,8 +294,6 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
     const char* deltas_raw = reader.take(count * sizeof(int));
     if (!deltas_raw) return {};
 
-    // Копируем, а не читаем через reinterpret_cast: смещение в блоке
-    // произвольное, и приведение указателя дало бы невыровненный доступ.
     std::vector<uint32_t> sizes(count);
     std::vector<int> deltas(count);
     if (count > 0) {
@@ -322,9 +301,6 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
         memcpy(deltas.data(), deltas_raw, count * sizeof(int));
     }
 
-    // ==========================================
-    // 1. ВОССТАНОВЛЕНИЕ ID ИЗ ДЕЛЬТ
-    // ==========================================
     std::vector<int> restored_ids(count);
     if (count > 0) {
         restored_ids[0] = deltas[0];
@@ -333,9 +309,6 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
         }
     }
 
-    // ==========================================
-    // 2. РАСПАКОВКА BOOL-КОЛОНКИ
-    // ==========================================
     char bool_flag = 0;
     if (!reader.read(bool_flag)) return {};
 
@@ -347,21 +320,16 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
         const char* packed_raw = reader.take(packed_bool_size);
         if (!packed_raw) return {};
 
-        // Битовая колонка обязана покрывать все записи блока.
         if (packed_bool_size < (count + 7) / 8) return {};
 
         unpacked_bools = unpack_bools(
             std::vector<char>(packed_raw, packed_raw + packed_bool_size), count);
     }
 
-    // 3. Чтение оставшихся данных (payloads)
     const char* payloads_ptr = columnar_buffer.data() + reader.offset();
     const size_t payloads_size = reader.remaining();
     size_t payload_offset = 0;
 
-    // Хеш bool-колонки берём из схемы: в блоке он не хранится.
-    // Поэтому переименование bool-колонки делает старые блоки нечитаемыми —
-    // эволюция схемы не поддерживается.
     uint32_t bool_hash = 0;
     for (const auto& col : t->schema) {
         if (col.type == DataType::BOOL) {
@@ -370,9 +338,6 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
         }
     }
 
-    // ==========================================
-    // 4. СБОРКА СТРОК (Row-based format)
-    // ==========================================
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t stored_sz = sizes[i];
         int id = restored_ids[i];
@@ -380,15 +345,12 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
         if (stored_sz > sizeof(int)) {
             size_t payload_size = stored_sz - sizeof(int);
 
-            // Длина записи взята из блока: она должна укладываться в то,
-            // что от блока осталось.
             if (payloads_size - payload_offset < payload_size) break;
 
             const char* payload_ptr = payloads_ptr + payload_offset;
 
             std::vector<char> restored;
             if (bool_flag == 1 && bool_hash != 0 && i < unpacked_bools.size()) {
-                // Возвращаем в запись значение, вырезанное при упаковке.
                 std::string value = unpacked_bools[i] ? "true" : "false";
                 restored = insert_field(payload_ptr, payload_size, bool_hash, value);
             } else {
@@ -410,11 +372,6 @@ std::vector<char> Storage::unpack_columns(const std::vector<char>& columnar_buff
     return row_buffer;
 }
 
-// Читает один сжатый блок из текущей позиции потока и возвращает его
-// в строковом (row-based) виде: zlib -> колонки -> строки.
-// Единственное место, где блок распаковывается, поэтому кодек записи и
-// кодек чтения не могут разойтись.
-// Возвращает false, если блок не дочитался или не распаковался.
 bool Storage::read_block(std::ifstream& in, Table* t, std::vector<char>& row_out) {
     CompressedBlockHeader header;
     if (!in.read(reinterpret_cast<char*>(&header), sizeof(header))) return false;
@@ -442,8 +399,6 @@ bool Storage::read_block(std::ifstream& in, Table* t, std::vector<char>& row_out
     return true;
 }
 
-// Достаёт значение одного поля, не разбирая запись целиком: ищет хеш имени
-// в таблице ключей и читает ровно нужные байты по смещению.
 bool Storage::extract_field(const char* data_ptr, size_t payload_size,
                             const std::string& key, std::string& out) {
     ByteReader reader(data_ptr, payload_size);
@@ -451,8 +406,6 @@ bool Storage::extract_field(const char* data_ptr, size_t payload_size,
     BinaryHeader head;
     if (!reader.read(head)) return false;
 
-    // keys_count прочитан из записи: он не должен описывать больше ключей,
-    // чем помещается в оставшиеся байты.
     const size_t keys_offset = sizeof(BinaryHeader);
     if (head.keys_count > (payload_size - keys_offset) / sizeof(KeyRecord)) return false;
 
@@ -476,11 +429,6 @@ bool Storage::extract_field(const char* data_ptr, size_t payload_size,
     return false;
 }
 
-// Собирает JSON записи из значений полей по схеме таблицы.
-// Раньше для этого в каждой записи лежала копия исходного JSON под ключом
-// __full__, то есть все значения хранились на диске дважды.
-// Пустая строка означает, что у таблицы нет схемы: без неё имена полей
-// восстановить нельзя, в записи лежат только их хеши.
 std::string Storage::rebuild_json(const char* data_ptr, size_t payload_size, Table* t) {
     if (t->schema.empty()) return "";
 
@@ -494,8 +442,6 @@ std::string Storage::rebuild_json(const char* data_ptr, size_t payload_size, Tab
         if (!first) out += ",";
         first = false;
 
-        // Имена и строки — через экранирование: значение может содержать
-        // кавычки, обратные косые черты и т. п.
         out += lite_db::json::quote(col.name);
         out += ':';
 
@@ -518,8 +464,6 @@ void Storage::insert_to_block(Table* t, const std::vector<char>& raw_record) {
     t->write_buffer.insert(t->write_buffer.end(), raw_record.begin(), raw_record.end());
 
     if (t->write_buffer.size() >= block_size_.load(std::memory_order_relaxed)) {
-        // Неудачный сброс не теряет данных: они остаются в буфере (и в журнале),
-        // а следующая запись попробует сбросить их снова.
         if (!flush_block_to_disk(t)) {
             std::cerr << "[Storage] Could not flush block of table '" << t->name
                       << "', keeping it in memory" << std::endl;
@@ -530,20 +474,14 @@ void Storage::insert_to_block(Table* t, const std::vector<char>& raw_record) {
 bool Storage::flush_block_to_disk(Table* t) {
     if (t->write_buffer.empty()) return true;
 
-    // 1. УМНАЯ ПРОВЕРКА ЛИМИТА ДО ОТКРЫТИЯ ФАЙЛА
     std::string path = t->path + "seg_" + std::to_string(t->current_seg_id) + ".db";
     
-    // Если текущий файл уже существует и его размер перевалил за MAX_SEG_SIZE
     std::error_code size_ec;
     if (fs::exists(path) && fs::file_size(path, size_ec) >= MAX_SEG_SIZE && !size_ec) {
         t->current_seg_id++; // Увеличиваем номер сегмента
         path = t->path + "seg_" + std::to_string(t->current_seg_id) + ".db"; // Обновляем путь!
     }
 
-    // ==========================================
-    // КОЛОНОЧНАЯ ПЕРЕПАКОВКА И СЖАТИЕ — ДО ОТКРЫТИЯ ФАЙЛА
-    // ==========================================
-    // Если сжатие не удастся, файл не трогаем вовсе.
     std::vector<char> columnar_data = pack_columns(t);
 
     uLongf original_size = columnar_data.size();
@@ -562,9 +500,6 @@ bool Storage::flush_block_to_disk(Table* t) {
     header.original_size = static_cast<uint32_t>(original_size);
     header.compressed_size = static_cast<uint32_t>(compressed_size); // Пишем реальный размер
 
-    // ==========================================
-    // ЗАПИСЬ БЛОКА
-    // ==========================================
     std::ofstream file(path, std::ios::binary | std::ios::app);
     if (!file.is_open()) return false;
     file.seekp(0, std::ios::end);
@@ -577,24 +512,17 @@ bool Storage::flush_block_to_disk(Table* t) {
     file.close();
 
     if (!written || file.fail()) {
-        // Блок мог записаться наполовину (например, кончилось место). Обрезаем
-        // хвост, иначе следующий блок встанет после мусора и при перезапуске
-        // чтение сегмента остановится на этом мусоре вместе со всем, что за ним.
         std::error_code ec;
         fs::resize_file(path, static_cast<std::uintmax_t>(block_start), ec);
         return false;
     }
 
-    // ==========================================
-    // ОБНОВЛЕНИЕ ИНДЕКСА — ТОЛЬКО ПОСЛЕ УСПЕШНОЙ ЗАПИСИ
-    // ==========================================
     size_t offset = 0;
     RecordView rec;
     while (next_record(t->write_buffer.data(), t->write_buffer.size(), offset, rec)) {
         if (rec.payload_size == 0) {
-            t->index.erase(rec.id); // Удаляем из индекса, если надгробие
+            t->index.erase(rec.id); 
         } else {
-            // Пишем актуальный путь (path) и смещение
             t->index[rec.id] = { path, block_start };
         }
     }
@@ -612,7 +540,6 @@ bool Storage::sync_segments(Table* t) {
         if (!lite_db::sync_file(*it)) return false;
         it = t->unsynced_segments.erase(it);
     }
-    // Запись о самих файлах сегментов живёт в каталоге таблицы.
     return lite_db::sync_directory(t->path);
 }
 
@@ -633,7 +560,6 @@ bool Storage::flush_all() {
         }
     }
 
-    // Каталоги таблиц создаются внутри root_path.
     if (!lite_db::sync_directory(root_path)) ok = false;
     return ok;
 }
@@ -654,7 +580,6 @@ bool is_leap_year(int year) noexcept {
     return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
 }
 
-// YYYY-MM-DD по настоящему календарю: 2023-02-29 — ошибка, 2024-02-29 — нет.
 bool is_valid_date(const std::string& date) {
     if (date.size() != 10 || date[4] != '-' || date[7] != '-') return false;
     for (size_t i = 0; i < date.size(); ++i) {
@@ -672,8 +597,6 @@ bool is_valid_date(const std::string& date) {
     return day <= max_day;
 }
 
-// Целое int32 целиком. Раньше проверка шла через std::stoi, который читает
-// начало строки и молча отбрасывает хвост: "30abc" проходило как 30.
 bool is_int32(const std::string& text) {
     if (!lite_db::json::is_number(text)) return false;
     if (text.find_first_of(".eE") != std::string::npos) return false;
@@ -683,7 +606,6 @@ bool is_int32(const std::string& text) {
     return ec == std::errc() && ptr == end;
 }
 
-// Конечное число: 1e999 по грамматике JSON — число, но это бесконечность.
 bool is_finite_double(const std::string& text) {
     if (!lite_db::json::is_number(text)) return false;
     char* end = nullptr;
@@ -691,24 +613,28 @@ bool is_finite_double(const std::string& text) {
     return end == text.c_str() + text.size() && std::isfinite(value);
 }
 
-// В протоколе перевод строки — конец ответа. Значение с переводом строки
-// разорвало бы ответ на два, поэтому такие значения не принимаются.
 bool has_line_break(const std::string& text) {
     return text.find_first_of("\r\n") != std::string::npos;
 }
 
 } // namespace
 
+bool Storage::has_field_hash_collision(const FieldMap& fields) {
+    std::unordered_set<uint32_t> seen;
+    seen.reserve(fields.size());
+    for (const auto& field : fields) {
+        if (!seen.insert(hash_string(field.first)).second) return true;
+    }
+    return false;
+}
+
 bool Storage::validate_fields(Table* t, FieldMap& fields) {
     for (const auto& field : fields) {
         if (field.second.is_string && has_line_break(field.second.text)) return false;
     }
 
-    // Без схемы проверять нечего: такая таблица хранит любые поля.
     if (t->schema.empty()) return true;
 
-    // Ровно колонки схемы. Лишнее поле иначе молча сохранилось бы
-    // и никогда не вернулось бы в SELECT.
     if (fields.size() != t->schema.size()) return false;
 
     for (const auto& col : t->schema) {
@@ -774,9 +700,6 @@ bool Storage::create_table(const std::string& name) {
         if (find_table(name)) return false;
     }
 
-    // Таблицу собираем без замка каталога: загрузка индекса читает все
-    // сегменты с диска, и держать на это время замок значило бы остановить
-    // все запросы ко всем таблицам.
     auto t = std::make_unique<Table>();
     t->name = name;
     t->path = root_path + name + "/";
@@ -793,18 +716,24 @@ bool Storage::create_table(const std::string& name) {
     return tables.emplace(name, std::move(t)).second;
 }
 
-bool Storage::set_schema(const std::string& table_name, const std::vector<Column>& columns) {
+SchemaResult Storage::set_schema(const std::string& table_name, const std::vector<Column>& columns) {
     Table* t = lookup_table(table_name);
-    if (!t) return false;
+    if (!t) return SchemaResult::table_not_found;
 
-    // Схему читают запросы к таблице, поэтому меняем её под замком таблицы.
+    std::unordered_map<uint32_t, const std::string*> seen;
+    seen.reserve(columns.size());
+    for (const auto& col : columns) {
+        const auto [it, inserted] = seen.emplace(hash_string(col.name), &col.name);
+        if (!inserted) {
+            return *it->second == col.name ? SchemaResult::duplicate_column
+                                           : SchemaResult::hash_collision;
+        }
+    }
     std::unique_lock<std::shared_mutex> lock(t->mtx);
     t->schema = columns;
-    save_schema(t); 
-    // Распаковка блока зависит от схемы (какая колонка — BOOL),
-    // поэтому закешированные блоки после смены схемы недействительны.
+    save_schema(t);
     cache_.clear();
-    return true;
+    return SchemaResult::ok;
 }
 
 void Storage::save_schema(Table* t) {
@@ -852,15 +781,9 @@ WriteResult Storage::insert(const std::string& table_name, int id, const std::st
 
     std::unique_lock<std::shared_mutex> t_lock(t->mtx);
 
-    // Проверка и вставка под одним замком. Если проверить отдельно, два
-    // INSERT с одним id могут оба увидеть «свободно» и оба записаться.
     if (mode == WriteMode::insert && exists_locked(t, id)) return WriteResult::id_exists;
 
     if (mode == WriteMode::update) {
-        // Как UPDATE в SQL: меняются только переданные поля, остальные
-        // берутся из текущей версии записи. У таблицы без схемы перечислить
-        // старые поля нельзя (в записи лежат только хеши имён), поэтому
-        // там UPDATE заменяет запись переданными полями.
         std::vector<char> current;
         const Lookup found = find_latest_locked(t, id, current);
         if (found == Lookup::missing)    return WriteResult::not_found;
@@ -876,14 +799,9 @@ WriteResult Storage::insert(const std::string& table_name, int id, const std::st
     }
 
     fill_id_column(t, id, fields);
-
-    // Сначала проверяем данные, потом пишем в журнал: мусор, который всё
-    // равно будет отвергнут, не должен попадать в журнал.
+    if (has_field_hash_collision(fields)) return WriteResult::field_hash_collision;
     if (!validate_fields(t, fields)) return WriteResult::invalid_data;
     const std::vector<char> record = make_record(id, fields);
-
-    // Журнал под замком таблицы: порядок записей в журнале совпадает
-    // с порядком применения, и восстановление воспроизведёт ту же историю.
     if (log && !log()) return WriteResult::log_failed;
 
     insert_to_block(t, record);
@@ -891,8 +809,6 @@ WriteResult Storage::insert(const std::string& table_name, int id, const std::st
 }
 
 void Storage::fill_id_column(Table* t, int id, FieldMap& fields) {
-    // SQL-транслятор не кладёт id внутрь записи, поэтому заполняем его сами:
-    // иначе таблица со схемой вида "id:INT name:STRING" отвергала бы каждую вставку.
     for (const auto& col : t->schema) {
         if (col.name == "id" && fields.count("id") == 0) {
             fields.emplace("id", lite_db::json::Value{std::to_string(id), false});
@@ -911,8 +827,6 @@ std::vector<char> Storage::make_record(int id, const FieldMap& fields) {
 
 WriteResult Storage::insert_batch(const std::string& table_name, const BatchRows& rows,
                                   bool skip_existing, const WriteLog& log) {
-    // Повтор id внутри одного пакета — ошибка клиента. Проверяем заранее:
-    // строки пакета попадают в буфер только в конце, и exists_locked их не видит.
     {
         std::unordered_map<int, bool> seen;
         for (const auto& row : rows) {
@@ -925,8 +839,6 @@ WriteResult Storage::insert_batch(const std::string& table_name, const BatchRows
 
     std::unique_lock<std::shared_mutex> t_lock(t->mtx);
 
-    // Сначала проверяем ВСЕ строки и только потом что-то меняем: пакет
-    // применяется целиком или не применяется вовсе.
     std::vector<std::vector<char>> records;
     records.reserve(rows.size());
     for (const auto& [id, parsed] : rows) {
@@ -936,13 +848,13 @@ WriteResult Storage::insert_batch(const std::string& table_name, const BatchRows
         }
         FieldMap fields(parsed.begin(), parsed.end());
         fill_id_column(t, id, fields);
+        if (has_field_hash_collision(fields)) return WriteResult::field_hash_collision;
         if (!validate_fields(t, fields)) return WriteResult::invalid_data;
         records.push_back(make_record(id, fields));
     }
 
-    if (records.empty()) return WriteResult::ok;   // при восстановлении всё уже было на диске
+    if (records.empty()) return WriteResult::ok; 
 
-    // Весь пакет — одна запись журнала и, значит, один fsync.
     if (log && !log()) return WriteResult::log_failed;
 
     for (const auto& record : records) insert_to_block(t, record);
@@ -950,8 +862,6 @@ WriteResult Storage::insert_batch(const std::string& table_name, const BatchRows
 }
 
 Storage::Lookup Storage::find_latest_locked(Table* t, int id, std::vector<char>& payload) {
-    // Последняя версия записи — последняя по порядку: сначала в буфере
-    // (он новее диска), потом в блоке на диске. Надгробие означает «удалена».
     auto scan = [id, &payload](const char* data, size_t size, bool& seen) {
         bool alive = false;
         size_t offset = 0;
@@ -969,22 +879,18 @@ Storage::Lookup Storage::find_latest_locked(Table* t, int id, std::vector<char>&
     const bool alive_in_buffer = scan(t->write_buffer.data(), t->write_buffer.size(), seen);
     if (seen) return alive_in_buffer ? Lookup::found : Lookup::missing;
 
-    // Именно find, а не operator[]: тот не const и под разделяемым замком
-    // стал бы изменением карты из нескольких потоков сразу.
     const auto index_it = t->index.find(id);
     if (index_it == t->index.end()) return Lookup::missing;
 
     const FileLocation& loc = index_it->second;
     const auto offset = static_cast<int64_t>(static_cast<std::streamoff>(loc.offset));
 
-    // Сначала кеш: блок на диске неизменен, поэтому копия не устаревает.
     BlockCache::Rows rows = cache_.get(loc.filename, offset);
     if (!rows) {
         std::ifstream in(loc.filename, std::ios::binary);
         if (!in) return Lookup::read_error;
         in.seekg(loc.offset);
 
-        // read_block проверяет размеры из заголовка до выделения памяти.
         auto fresh = std::make_shared<std::vector<char>>();
         if (!read_block(in, t, *fresh)) return Lookup::read_error;
         rows = std::move(fresh);
@@ -998,7 +904,6 @@ std::string Storage::select(const std::string& table_name, int id, const std::st
     Table* t = lookup_table(table_name);
     if (!t) return "ERR_TABLE_NOT_FOUND";
 
-    // Чтение: несколько запросов к одной таблице идут одновременно.
     std::shared_lock<std::shared_mutex> t_lock(t->mtx);
 
     std::vector<char> payload;
@@ -1065,8 +970,6 @@ std::string Storage::select_all(const std::string& table_name) {
 
     if (latest_data.empty()) return "[]";
 
-    // Без переводов строк: в протоколе перевод строки — конец ответа, и
-    // многострочный ответ клиент принял бы за несколько разных ответов.
     std::string result = "[";
     bool first = true;
     for (const auto& [id, json_str] : latest_data) {
@@ -1106,7 +1009,6 @@ void Storage::load_table_index(Table* t) {
 }
 
 bool Storage::exists_locked(Table* t, int id) {
-    // Буфер новее диска: последняя версия записи в буфере решает всё.
     size_t buf_off = 0;
     bool found_in_buf = false;
     bool is_deleted = false;

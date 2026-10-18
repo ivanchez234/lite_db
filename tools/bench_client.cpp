@@ -1,25 +1,4 @@
 // Нагрузочный клиент lite_db: задержки по перцентилям и пропускная способность.
-//
-//   bench_client --workload insert --clients 4 --ops 5000
-//   bench_client --workload select --clients 4 --ops 20000 --preload 100000
-//
-// Каждый клиент — отдельный поток со своим соединением, работающий в режиме
-// «запрос — ответ». Задержка измеряется на каждом запросе, перцентили
-// считаются по всем запросам всех клиентов.
-//
-// Нагрузки:
-//   insert  — вставка новых записей (--batch N: по N записей командой MPUT)
-//   select  — чтение случайных записей из предварительно загруженных (--preload)
-//   update  — частичное обновление случайных загруженных записей
-//
-// --pipeline K: отправлять K запросов одной пачкой и только потом читать
-// K ответов (конвейер). Задержка меряется на пачку.
-//
-// --table-per-client 1: у каждого клиента своя таблица (bench_0, bench_1, ...),
-// чтобы записи не соревновались за замок одной таблицы.
-//
-// --json файл: дописать результат одной строкой JSON (для скриптов).
-
 #include "server/socket_handle.h"
 
 #include <algorithm>
@@ -44,13 +23,13 @@ struct Options {
     std::string workload = "insert";
     std::string table    = "bench";
     int         clients  = 1;
-    int         ops      = 1000;     // запросов на клиента
-    int         batch    = 1;        // записей в одном запросе (insert)
-    int         preload  = 0;        // записей загрузить перед select/update
-    long long   id_base  = 0;        // с какого id начинать вставку
+    int         ops      = 1000; 
+    int         batch    = 1; 
+    int         preload  = 0;        
+    long long   id_base  = 0;      
     bool        table_per_client = false;
     int         pipeline = 1;
-    std::string label;               // подпись результата
+    std::string label;    
     std::string json_out;
 };
 

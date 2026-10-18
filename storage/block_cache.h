@@ -12,19 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
-// Кеш распакованных блоков (LRU).
-//
-// Чтение записи с диска — это открыть сегмент, прочитать блок, распаковать
-// zlib и разобрать колонки. Если тот же блок нужен снова, всю работу можно
-// не повторять: блок на диске никогда не меняется (сегменты только
-// дописываются), поэтому закешированная копия не устаревает.
-//
-// Блоки отдаются как shared_ptr на неизменяемый буфер: читатель может
-// пользоваться блоком, даже если кеш его уже вытеснил, — память освободится,
-// когда отпустит последний.
-//
-// Кеш поделён на шарды со своими мьютексами: потоки, читающие разные блоки,
-// почти никогда не ждут друг друга.
+
 class BlockCache {
 public:
     using Rows = std::shared_ptr<const std::vector<char>>;
@@ -51,18 +39,16 @@ private:
 
     struct Entry {
         std::string key;
-        Rows        rows;
-        size_t      charge;   // сколько байт засчитано за запись
+        Rows rows;
+        size_t charge;   
     };
 
-    // alignas(64): мьютексы соседних шардов не делят одну кеш-линию,
-    // иначе потоки мешали бы друг другу на уровне процессора (false sharing).
     struct alignas(64) Shard {
-        mutable std::mutex                                           mutex;
-        std::list<Entry>                                             lru;  // спереди — недавние
+        mutable std::mutex mutex;
+        std::list<Entry> lru;  
         std::unordered_map<std::string, std::list<Entry>::iterator> index;
-        size_t                                                       bytes = 0;
-        size_t                                                       capacity = 0;
+        size_t bytes = 0;
+        size_t capacity = 0;
 
         void evict_to_capacity();
     };
@@ -71,6 +57,6 @@ private:
     Shard& shard_for(const std::string& key);
 
     std::array<Shard, kShards> shards_;
-    lite_db::Counter           hits_;
-    lite_db::Counter           misses_;
+    lite_db::Counter hits_;
+    lite_db::Counter misses_;
 };

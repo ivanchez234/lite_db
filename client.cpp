@@ -1,8 +1,3 @@
-// Консольный клиент lite_db: читает команды из stdin, печатает ответы сервера.
-//
-// Протокол построчный: одна команда — одна строка, один ответ — одна строка.
-//   client_app [host] [port]      по умолчанию 127.0.0.1 5555
-
 #include "server/socket_handle.h"
 
 #include <iostream>
@@ -10,8 +5,6 @@
 
 namespace {
 
-// Читает из сокета одну строку ответа. Байты, пришедшие после '\n',
-// остаются в buffered и пойдут в следующий ответ.
 bool read_line(SOCKET sock, std::string& buffered, std::string& line) {
     for (;;) {
         const size_t newline = buffered.find('\n');
@@ -91,7 +84,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-    }   // сокет закрывается до WSACleanup
+    }   
 
 #ifdef _WIN32
     WSACleanup();

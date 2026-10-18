@@ -196,8 +196,8 @@ private:
     }
 
     std::string_view s_;
-    size_t           pos_ = 0;
-    std::string      error_;
+    size_t pos_ = 0;
+    std::string error_;
 };
 
 } // namespace

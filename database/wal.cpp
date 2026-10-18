@@ -76,22 +76,12 @@ bool Wal::append(const std::string& payload) {
         return false;
     }
 
-    // --- Групповой коммит (режим full) ---
-    //
-    // fsync стоит сотни микросекунд, и раньше каждая запись делала свой,
-    // держа мьютекс журнала: N параллельных записей ждали N fsync по очереди.
-    //
-    // Теперь первый, кто застал журнал без идущего fsync, становится лидером:
-    // проталкивает в ядро всё дописанное к этому моменту (своё и чужое)
-    // и делает ОДИН fsync уже без мьютекса. Пока он ждёт диск, другие потоки
-    // дописывают свои записи и встают в очередь. Когда лидер закончил, все,
-    // чьи записи попали в его fsync, получают ответ сразу; остальные выбирают
-    // нового лидера. Один fsync подтверждает сразу пачку записей.
+
     const uint64_t my_seq = ++written_seq_;
 
     for (;;) {
-        if (failed_) return false;              // чужой fsync упал — нашей записи верить нельзя
-        if (synced_seq_ >= my_seq) return true; // нашу запись уже подтвердил чей-то fsync
+        if (failed_) return false;             
+        if (synced_seq_ >= my_seq) return true;
 
         if (syncing_) {
             synced_cv_.wait(lock);
@@ -99,7 +89,7 @@ bool Wal::append(const std::string& payload) {
         }
 
         syncing_ = true;
-        const uint64_t target = written_seq_;   // всё, что дописано к этому моменту
+        const uint64_t target = written_seq_; 
         bool ok = std::fflush(file_.get()) == 0;
         const int fd = LITE_DB_FILENO(file_.get());
 
@@ -147,8 +137,6 @@ bool Wal::push_to_disk() {
 std::vector<std::string> Wal::replay() const {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // Свои записи могли застрять в буфере процесса (режим none) —
-    // отдаём их ядру, иначе отдельный дескриптор ниже их не увидит.
     if (file_) (void)std::fflush(file_.get());
 
     std::vector<std::string> records;
@@ -160,14 +148,14 @@ std::vector<std::string> Wal::replay() const {
         uint32_t sum = 0;
         uint32_t len = 0;
 
-        if (std::fread(&sum, sizeof(sum), 1, in.get()) != 1) break;   // конец файла
-        if (std::fread(&len, sizeof(len), 1, in.get()) != 1) break;   // заголовок оборван
-        if (len == 0 || len > kMaxRecordSize) break;                  // длина бессмысленна
+        if (std::fread(&sum, sizeof(sum), 1, in.get()) != 1) break;   
+        if (std::fread(&len, sizeof(len), 1, in.get()) != 1) break;  
+        if (len == 0 || len > kMaxRecordSize) break;              
 
         std::string payload(len, '\0');
-        if (std::fread(&payload[0], 1, len, in.get()) != len) break;  // запись оборвана
+        if (std::fread(&payload[0], 1, len, in.get()) != len) break;  
 
-        if (checksum(payload) != sum) break;                          // запись повреждена
+        if (checksum(payload) != sum) break;          
 
         records.push_back(std::move(payload));
     }
@@ -177,20 +165,17 @@ std::vector<std::string> Wal::replay() const {
 
 bool Wal::reset() {
     std::unique_lock<std::mutex> lock(mutex_);
-    // На всякий случай дожидаемся идущего fsync: файл сейчас будет закрыт.
-    // (FLUSH и так держит замок контрольной точки, и пишущих в этот момент нет.)
+
     synced_cv_.wait(lock, [this] { return !syncing_; });
 
     file_.reset();
 
-    // Открытие на запись обрезает файл. Отдельный дескриптор не держим:
-    // два открытых дескриптора на один файл ведут себя по-разному в разных ОС.
     if (const FilePtr truncating{std::fopen(path_.c_str(), "wb")}; !truncating) {
         failed_ = true;
         return false;
     }
 
-    file_.reset(std::fopen(path_.c_str(), "a+b"));  // NOLINT(cppcoreguidelines-owning-memory): владеет FilePtr
+    file_.reset(std::fopen(path_.c_str(), "a+b"));  
     if (!file_ || !push_to_disk()) {
         failed_ = true;
         return false;

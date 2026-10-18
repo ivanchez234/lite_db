@@ -16,7 +16,6 @@
 
 namespace {
 
-// Из обработчика сигнала можно трогать только атомики без блокировок.
 std::atomic<bool> g_shutdown_requested{false};
 static_assert(std::atomic<bool>::is_always_lock_free,
               "флаг остановки должен быть lock-free, иначе его нельзя трогать из обработчика сигнала");
@@ -31,10 +30,7 @@ BOOL WINAPI on_console_event(DWORD event) {
             return TRUE;
 
         case CTRL_CLOSE_EVENT:
-            // Окно консоли закрывают: Windows завершит процесс, как только
-            // обработчик вернёт управление (или через ~5 секунд). Даём основному
-            // потоку время сбросить данные — когда main() вернётся, процесс
-            // закончится сам, не дожидаясь конца этой паузы.
+            
             lite_db::request_shutdown();
             ::Sleep(4500);
             return TRUE;
@@ -63,14 +59,10 @@ void install_shutdown_handlers() {
     struct sigaction stop_action{};
     stop_action.sa_handler = lite_db_on_signal;
     sigemptyset(&stop_action.sa_mask);
-    // Без SA_RESTART: заблокированные системные вызовы вернут EINTR,
-    // и поток быстрее заметит флаг остановки.
     stop_action.sa_flags = 0;
     sigaction(SIGINT,  &stop_action, nullptr);
     sigaction(SIGTERM, &stop_action, nullptr);
 
-    // Запись в закрытый клиентом сокет не должна убивать сервер.
-    // send() и так вызывается с MSG_NOSIGNAL, это страховка для остальных путей.
     struct sigaction ignore_action{};
     ignore_action.sa_handler = SIG_IGN;
     sigemptyset(&ignore_action.sa_mask);

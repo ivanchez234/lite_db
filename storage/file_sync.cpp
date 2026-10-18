@@ -14,7 +14,6 @@ namespace lite_db {
 #ifdef _WIN32
 
 bool sync_file(const std::string& path) noexcept {
-    // _commit — это FlushFileBuffers поверх CRT-дескриптора. Нужен доступ на запись.
     const int fd = ::_open(path.c_str(), _O_RDWR | _O_BINARY);
     if (fd < 0) return false;
     const bool ok = ::_commit(fd) == 0;
@@ -23,7 +22,6 @@ bool sync_file(const std::string& path) noexcept {
 }
 
 bool sync_directory(const std::string&) noexcept {
-    // NTFS журналирует метаданные сам, отдельный сброс каталога не нужен.
     return true;
 }
 
@@ -41,9 +39,7 @@ int open_retrying(const char* path, int flags) noexcept {
 
 bool fsync_and_close(int fd) noexcept {
     if (fd < 0) return false;
-    // Ошибку fsync нельзя «повторить»: ядро после неё помечает страницы
-    // чистыми, и второй fsync вернёт успех, хотя данные потеряны.
-    // Поэтому результат первой попытки и есть ответ.
+ 
     const bool ok = ::fsync(fd) == 0;
     ::close(fd);
     return ok;

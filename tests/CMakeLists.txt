@@ -20,17 +20,14 @@ add_executable(lite_db_tests
 target_link_libraries(lite_db_tests PRIVATE lite_db_core Catch2::Catch2WithMain)
 lite_db_static_runtime(lite_db_tests)
 
-# Тесты пишут каталог data/ и журналы в своём рабочем каталоге, а не в корне проекта.
 add_test(NAME lite_db_tests
          COMMAND lite_db_tests
          WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
-# Тесты на сеть и конкурентность при поломке склонны зависать, а не падать.
+# Тесты на сеть и конкурентность
 set_tests_properties(lite_db_tests PROPERTIES TIMEOUT 600)
 
-# --- Сквозной тест: настоящий процесс сервера + Python-драйвер ----------------
-# Проверяет то, что не видно изнутри процесса: остановку по сигналу
-# и восстановление из журнала после аварийного завершения.
+# Сквозной тест
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     add_test(NAME driver_e2e
